@@ -1,0 +1,21 @@
+esp-wifi-jammer-detector
+Copyright (C) 2026 esp-wifi-jammer-detector contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE.
+
+Third-party code:
+
+- ESPARGOS esp-sdr (https://github.com/ESPARGOS/esp-sdr), GPL-3.0-or-later,
+  Copyright ESPARGOS contributors. Vendored parts are listed in
+  components/espsdr_rx/VENDORED.md.
+- components/board/st7796.c is adapted from espressif/esp_lcd_st7796 1.0.0,
+  SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD,
+  Apache-2.0.
+- The CH32V006 expander register protocol follows
+  waveshare/custom_io_expander_ch32v003 1.0.2, SPDX-FileCopyrightText:
+  2023-2024 Espressif Systems (Shanghai) CO LTD, Apache-2.0.
+- Board pin assignments come from Waveshare's ESP32-C5-Touch-LCD-3.5 resource
+  repository (Apache-2.0); see components/board/include/board_pins.h.

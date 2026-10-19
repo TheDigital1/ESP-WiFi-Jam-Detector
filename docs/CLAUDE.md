@@ -14,4 +14,5 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 
 ## Status
 - M0 done (stock esp-sdr verified in browser viewer on 2.4 and 5 GHz).
-- Current milestone: M1
+- M1 done (pattern, touch, BOOT, landscape orient 0 confirmed on device).
+- Current milestone: M2

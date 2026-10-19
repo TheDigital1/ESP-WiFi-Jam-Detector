@@ -1,0 +1,58 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Board support for the Waveshare ESP32-C5-Touch-LCD-3.5: shared I2C bus,
+ * CH32V006 IO expander (LCD/touch reset, backlight), AXP2101 status (read
+ * only), ST7796 LCD in landscape, FT6336 touch and the BOOT button.
+ */
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+#include "esp_err.h"
+#include "esp_lcd_types.h"
+
+#define BOARD_LCD_W 480 /* landscape */
+#define BOARD_LCD_H 320
+
+typedef enum {
+    BOARD_ORIENT_LANDSCAPE = 0,  /* MADCTL MV */
+    BOARD_ORIENT_LANDSCAPE_FLIP, /* MADCTL MV|MX|MY, rotated 180 degrees */
+} board_orient_t;
+
+typedef struct {
+    bool pressed;
+    uint16_t x, y;         /* landscape coordinates for the current orientation */
+    uint16_t raw_x, raw_y; /* controller coordinates (portrait, 320x480) */
+} board_touch_t;
+
+/* Bring up I2C, expander, PMU log, LCD (backlight left off), touch and BOOT button. */
+esp_err_t board_init(board_orient_t orient);
+
+/* Log every responding 7-bit address on the shared I2C bus. */
+esp_err_t board_i2c_scan(void);
+
+/* Log AXP2101 identity and status. Reads registers only, never writes. */
+esp_err_t board_pmu_log(void);
+
+esp_err_t board_backlight_set(uint8_t percent);
+
+esp_err_t board_lcd_set_orient(board_orient_t orient);
+board_orient_t board_lcd_orient(void);
+
+/* Blocking draw of big-endian RGB565 pixels into [x0,x1) x [y0,y1).
+ * Returns once the DMA transfer has finished, so the buffer can be reused.
+ * The buffer may be in internal DMA RAM or in PSRAM (direct PSRAM DMA). */
+esp_err_t board_lcd_draw(int x0, int y0, int x1, int y1, const void *px);
+
+/* RGB565 value already byte-swapped for the panel's big-endian bus order. */
+static inline uint16_t board_rgb565(uint8_t r, uint8_t g, uint8_t b)
+{
+    uint16_t c = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    return (uint16_t)((c >> 8) | (c << 8));
+}
+
+esp_err_t board_touch_read(board_touch_t *t);
+
+/* BOOT button level, true while held (active low). */
+bool board_boot_pressed(void);
