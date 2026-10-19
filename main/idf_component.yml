@@ -1,0 +1,6 @@
+## SPDX-License-Identifier: GPL-3.0-or-later
+dependencies:
+  idf: ">=6.0"
+  # Same LVGL version as Waveshare's ESP32-C5-Touch-LCD-3.5 BSP. The display
+  # glue is our own (main/lvgl_port.c) so LCD transfers can avoid captures.
+  lvgl/lvgl: "9.5.0"

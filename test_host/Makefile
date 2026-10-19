@@ -5,7 +5,7 @@ CFLAGS ?= -std=c17 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Werror
 INC = -I../main -I../components/espsdr_rx/upstream/common
 BUILD = build
 
-TESTS = $(BUILD)/test_dsp
+TESTS = $(BUILD)/test_dsp $(BUILD)/test_bandplan $(BUILD)/test_plot
 
 .PHONY: all test clean
 all: test
@@ -15,6 +15,12 @@ $(BUILD):
 
 $(BUILD)/test_dsp: test_dsp.c ../main/dsp.c ../main/dsp.h | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -o $@ test_dsp.c ../main/dsp.c -lm
+
+$(BUILD)/test_bandplan: test_bandplan.c ../main/bandplan.c ../main/bandplan.h | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) -o $@ test_bandplan.c ../main/bandplan.c
+
+$(BUILD)/test_plot: test_plot.c ../main/plot.c ../main/plot.h | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) -o $@ test_plot.c ../main/plot.c
 
 test: $(TESTS)
 	@for t in $(TESTS); do ./$$t || exit 1; done

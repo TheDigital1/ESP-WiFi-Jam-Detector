@@ -1,0 +1,20 @@
+menu "esp-wifi-jammer-detector"
+
+    config JD_CHARACTERIZE
+        bool "Run receiver characterisation at boot"
+        default n
+        help
+            Before the sweep starts, log the receiver's filter shape at
+            20/40/80 MS/s and measure LCD self-interference with and without
+            the radio-quiet window. Takes about a minute. Receive only.
+
+    config JD_CPU_STATS
+        bool "Log per-task CPU usage every 10 s"
+        default n
+        select FREERTOS_USE_TRACE_FACILITY
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        select FREERTOS_USE_STATS_FORMATTING_FUNCTIONS
+        help
+            Diagnostics: prints FreeRTOS run-time stats (CPU share per task).
+
+endmenu

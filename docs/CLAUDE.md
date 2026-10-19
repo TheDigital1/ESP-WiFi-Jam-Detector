@@ -16,4 +16,5 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 - M0 done (stock esp-sdr verified in browser viewer on 2.4 and 5 GHz).
 - M1 done (pattern, touch, BOOT, landscape orient 0 confirmed on device).
 - M2 done (espsdr_rx vendored; 2437/5500 capture, floor/peak, clipping + auto-range prototype verified).
-- Current milestone: M3
+- M3 done (80 MS/s sweep, 48 MHz/tune, radio-quiet LCD window, live spectrum ~10 fps confirmed on device).
+- Current milestone: M4

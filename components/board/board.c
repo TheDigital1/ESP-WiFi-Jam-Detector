@@ -48,6 +48,18 @@ static uint8_t s_exio_out;
 static esp_lcd_panel_io_handle_t s_lcd_io;
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t s_lcd_done;
+/* "Radio quiet" token: held for the whole of each LCD transfer and by the
+ * sweep for each capture, so LCD DMA never runs while the receiver samples.
+ * Measured in M3: LCD traffic adds 4-9 dB spurs and up to +3.4 dB floor at
+ * 2.4 GHz (none at 5 GHz). Given back from the transfer-done ISR. */
+static SemaphoreHandle_t s_rf_token;
+/* Captures take precedence: while one waits, no new LCD transfer starts, so a
+ * capture waits for at most the transfer already in flight. Without this the
+ * higher-priority UI re-took the token after every strip and starved it. */
+static volatile int s_rf_waiting;
+static SemaphoreHandle_t s_rf_done;
+static board_lcd_done_cb_t s_async_cb;
+static void *s_async_ctx;
 static board_orient_t s_orient;
 
 static esp_err_t reg_write(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val)
@@ -145,10 +157,20 @@ esp_err_t board_backlight_set(uint8_t percent)
     return reg_write(s_exio, BOARD_EXIO_REG_PWM, (uint8_t)(percent * 255u / 100u));
 }
 
-static bool IRAM_ATTR lcd_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
+/* Runs in the SPI ISR. CONFIG_SPI_MASTER_ISR_IN_IRAM is off (saves IRAM), so
+ * this and the async callback may live in flash. */
+static bool lcd_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
 {
     BaseType_t woken = pdFALSE;
-    xSemaphoreGiveFromISR(s_lcd_done, &woken);
+    board_lcd_done_cb_t cb = s_async_cb;
+    void *cb_ctx = s_async_ctx;
+    s_async_cb = NULL;
+    xSemaphoreGiveFromISR(s_rf_token, &woken);
+    if (cb) {
+        cb(cb_ctx);
+    } else {
+        xSemaphoreGiveFromISR(s_lcd_done, &woken);
+    }
     return woken == pdTRUE;
 }
 
@@ -169,7 +191,10 @@ board_orient_t board_lcd_orient(void)
 static esp_err_t lcd_init(board_orient_t orient)
 {
     s_lcd_done = xSemaphoreCreateBinary();
-    ESP_RETURN_ON_FALSE(s_lcd_done, ESP_ERR_NO_MEM, TAG, "no mem for LCD semaphore");
+    s_rf_token = xSemaphoreCreateBinary();
+    s_rf_done = xSemaphoreCreateBinary();
+    ESP_RETURN_ON_FALSE(s_lcd_done && s_rf_token && s_rf_done, ESP_ERR_NO_MEM, TAG, "no mem for LCD semaphores");
+    xSemaphoreGive(s_rf_token);
 
     /* Keep the TF card deselected while the LCD uses the shared bus. */
     const gpio_config_t sd_cs = {.pin_bit_mask = BIT64(BOARD_SD_CS), .mode = GPIO_MODE_OUTPUT};
@@ -215,12 +240,44 @@ static esp_err_t lcd_init(board_orient_t orient)
     return ESP_OK;
 }
 
+esp_err_t board_lcd_draw_async(int x0, int y0, int x1, int y1, const void *px, board_lcd_done_cb_t done, void *ctx)
+{
+    for (int i = 0; s_rf_waiting && i < 50; i++) {
+        xSemaphoreTake(s_rf_done, pdMS_TO_TICKS(10)); /* let the pending capture go first */
+    }
+    ESP_RETURN_ON_FALSE(xSemaphoreTake(s_rf_token, pdMS_TO_TICKS(500)) == pdTRUE, ESP_ERR_TIMEOUT, TAG,
+                        "LCD bus busy");
+    s_async_ctx = ctx;
+    s_async_cb = done;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x1, y1, px);
+    if (err != ESP_OK) {
+        s_async_cb = NULL;
+        xSemaphoreGive(s_rf_token);
+        ESP_LOGE(TAG, "draw failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
 esp_err_t board_lcd_draw(int x0, int y0, int x1, int y1, const void *px)
 {
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x1, y1, px), TAG, "draw failed");
+    ESP_RETURN_ON_ERROR(board_lcd_draw_async(x0, y0, x1, y1, px, NULL, NULL), TAG, "draw");
     ESP_RETURN_ON_FALSE(xSemaphoreTake(s_lcd_done, pdMS_TO_TICKS(500)) == pdTRUE, ESP_ERR_TIMEOUT, TAG,
                         "LCD transfer timeout");
     return ESP_OK;
+}
+
+esp_err_t board_rf_quiet_begin(uint32_t timeout_ms)
+{
+    s_rf_waiting++;
+    bool ok = xSemaphoreTake(s_rf_token, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    s_rf_waiting--;
+    return ok ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+void board_rf_quiet_end(void)
+{
+    xSemaphoreGive(s_rf_token);
+    xSemaphoreGive(s_rf_done);
 }
 
 esp_err_t board_touch_read(board_touch_t *t)

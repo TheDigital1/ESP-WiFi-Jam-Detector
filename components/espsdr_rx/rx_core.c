@@ -14,8 +14,9 @@
  *   GAIN MANUAL/HARDWARE became rx_set_gain_manual()/rx_set_gain_auto().
  * - acquire_iq() reports errors as esp_err_t instead of protocol replies, and
  *   rx_capture() unpacks the snapshot out of the capture bank.
- * - Logging is left enabled (upstream silences it to keep the serial
- *   protocol clean).
+ * - Logging stays enabled except for the "phy" tag (upstream silences all
+ *   logging). The PHY library logs one line per capture from adctrig(); over
+ *   the USB console that cost ~2 ms per snapshot and much of the CPU.
  * prepare_rx(), the capture sequence, sentinels and SRAM ownership handling
  * are unchanged.
  */
@@ -142,6 +143,8 @@ esp_err_t rx_init(void) {
     ESP_RETURN_ON_ERROR(esp_wifi_set_promiscuous(true), TAG, "set_promiscuous");
     ESP_RETURN_ON_ERROR(esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE), TAG, "set_channel");
     prepare_rx();
+    /* The PHY logs every snapshot at INFO; see the header comment. */
+    esp_log_level_set("phy", ESP_LOG_WARN);
     ESP_LOGI(TAG, "receiver ready at %u MHz, gain max %u", frequency_mhz, gain_max());
     return ESP_OK;
 }

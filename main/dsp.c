@@ -27,9 +27,9 @@ static int16_t clamp16(int32_t v)
     return v > 32767 ? 32767 : (v < -32768 ? -32768 : (int16_t)v);
 }
 
-int dsp_fft_init(dsp_fft_t *f, unsigned n, int16_t *window, int16_t *twiddle, int16_t *work)
+int dsp_fft_init(dsp_fft_t *f, unsigned n, int16_t *window, int16_t *twiddle, int16_t *work, uint16_t *order)
 {
-    if (n < 256 || n > DSP_MAX_N || (n & (n - 1)) || !window || !twiddle || !work) {
+    if (n < 256 || n > DSP_MAX_N || (n & (n - 1)) || !window || !twiddle || !work || !order) {
         return -1;
     }
     f->n = n;
@@ -40,6 +40,11 @@ int dsp_fft_init(dsp_fft_t *f, unsigned n, int16_t *window, int16_t *twiddle, in
     f->window = window;
     f->twiddle = twiddle;
     f->work = work;
+    f->order = order;
+    /* FFT output is bit-reversed; centre DC at n/2. */
+    for (unsigned m = 0; m < n; m++) {
+        order[m] = (uint16_t)bitrev((m + n / 2) & (n - 1), f->log2n);
+    }
     /* Same window as upstream spectrum.c: 32767 * Hann. */
     for (unsigned j = 0; j < n; j++) {
         window[j] = (int16_t)lrintf(16383.5f * (1.0f - cosf(2.0f * (float)M_PI * j / n)));
@@ -69,10 +74,8 @@ void dsp_power_spectrum(dsp_fft_t *f, const int16_t *iq, uint32_t *power)
         x[2 * j + 1] = clamp16((iq[2 * j + 1] * f->window[j]) >> 9);
     }
     spectrum_fft_poll(x, n, f->twiddle, no_poll, NULL);
-    /* Output is in bit-reversed order; reorder and centre DC at n/2. */
     for (unsigned m = 0; m < n; m++) {
-        unsigned k = (m + n / 2) & (n - 1);
-        unsigned at = bitrev(k, f->log2n);
+        unsigned at = f->order[m];
         int32_t re = x[2 * at], im = x[2 * at + 1];
         power[m] = (uint32_t)(re * re) + (uint32_t)(im * im);
     }
@@ -164,4 +167,35 @@ unsigned dsp_peak_bin(const int16_t *cdb, unsigned lo, unsigned hi, unsigned dc,
         }
     }
     return best;
+}
+
+void dsp_dc_notch(uint32_t *power, unsigned n, unsigned guard)
+{
+    if (!guard || guard + 2 > n / 2) {
+        return;
+    }
+    const unsigned dc = n / 2;
+    uint64_t sum = (uint64_t)power[dc - guard] + power[dc - guard - 1] + power[dc + guard] + power[dc + guard + 1];
+    uint32_t fill = (uint32_t)(sum / 4);
+    for (unsigned j = dc - guard + 1; j < dc + guard; j++) {
+        power[j] = fill;
+    }
+}
+
+void dsp_reduce(const uint32_t *avg, const uint32_t *max, unsigned fft_first, unsigned decim, unsigned count,
+                int16_t *avg_cdb, int16_t *max_cdb)
+{
+    for (unsigned k = 0; k < count; k++) {
+        const unsigned j0 = fft_first + k * decim;
+        uint64_t sum = 0;
+        uint32_t peak = 0;
+        for (unsigned d = 0; d < decim; d++) {
+            sum += avg[j0 + d];
+            if (max[j0 + d] > peak) {
+                peak = max[j0 + d];
+            }
+        }
+        avg_cdb[k] = dsp_cdb((uint32_t)(sum / decim));
+        max_cdb[k] = dsp_cdb(peak);
+    }
 }

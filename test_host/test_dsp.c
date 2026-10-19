@@ -22,6 +22,7 @@ static int failures;
     } while (0)
 
 static int16_t window[DSP_MAX_N], twiddle[DSP_MAX_N], work[2 * DSP_MAX_N], iq[2 * DSP_MAX_N];
+static uint16_t order[DSP_MAX_N];
 static uint32_t power[DSP_MAX_N];
 static int16_t cdb[DSP_MAX_N], scratch[DSP_MAX_N];
 
@@ -39,7 +40,7 @@ static void make_tone(unsigned n, int k, double a, double noise)
 static void test_tone_position(unsigned n)
 {
     dsp_fft_t f;
-    CHECK(dsp_fft_init(&f, n, window, twiddle, work) == 0, "init n=%u", n);
+    CHECK(dsp_fft_init(&f, n, window, twiddle, work, order) == 0, "init n=%u", n);
     const int offsets[] = {1, 7, 100, -100, (int)n / 2 - 3, -(int)n / 2 + 3};
     for (unsigned t = 0; t < sizeof(offsets) / sizeof(offsets[0]); t++) {
         int k = offsets[t];
@@ -58,7 +59,7 @@ static void test_dc(void)
 {
     const unsigned n = 1024;
     dsp_fft_t f;
-    dsp_fft_init(&f, n, window, twiddle, work);
+    dsp_fft_init(&f, n, window, twiddle, work, order);
     for (unsigned j = 0; j < n; j++) {
         iq[2 * j] = 200;
         iq[2 * j + 1] = -150;
@@ -75,7 +76,7 @@ static void test_full_scale_level(void)
 {
     const unsigned n = 1024;
     dsp_fft_t f;
-    dsp_fft_init(&f, n, window, twiddle, work);
+    dsp_fft_init(&f, n, window, twiddle, work, order);
     make_tone(n, 50, 511, 0);
     dsp_power_spectrum(&f, iq, power);
     /* Input maps 511 -> ~2^15, Hann coherent gain 0.5, FFT scaled by 1/n:
@@ -96,6 +97,31 @@ static void test_cdb_accuracy(void)
     }
     CHECK(worst <= 3.0, "cdB worst error %.2f cdB", worst);
     CHECK(dsp_cdb(0) == 0, "cdb(0)");
+}
+
+static void test_dc_notch_and_reduce(void)
+{
+    const unsigned n = 1024;
+    for (unsigned j = 0; j < n; j++) {
+        power[j] = 1000;
+    }
+    power[n / 2] = 5000000;
+    power[n / 2 - 1] = power[n / 2 + 1] = 90000;
+    dsp_dc_notch(power, n, 3);
+    for (unsigned j = n / 2 - 2; j <= n / 2 + 2; j++) {
+        CHECK(power[j] == 1000, "notch bin %u = %u", j, power[j]);
+    }
+    static uint32_t mx[DSP_MAX_N];
+    for (unsigned j = 0; j < n; j++) {
+        power[j] = 100 * (j % 4 + 1); /* mean of each 4-group = 250 */
+        mx[j] = j;
+    }
+    static int16_t a[64], m[64];
+    dsp_reduce(power, mx, 100, 4, 10, a, m);
+    for (int k = 0; k < 10; k++) {
+        CHECK(abs(a[k] - dsp_cdb(250)) <= 1, "reduce avg %d: %d", k, a[k]);
+        CHECK(m[k] == dsp_cdb(100 + 4 * k + 3), "reduce max %d: %d", k, m[k]);
+    }
 }
 
 static int cmp16(const void *a, const void *b)
@@ -135,6 +161,7 @@ int main(void)
     test_full_scale_level();
     test_cdb_accuracy();
     test_percentile();
+    test_dc_notch_and_reduce();
     if (failures) {
         printf("%d check(s) failed\n", failures);
         return 1;

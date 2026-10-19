@@ -45,6 +45,18 @@ board_orient_t board_lcd_orient(void);
  * The buffer may be in internal DMA RAM or in PSRAM (direct PSRAM DMA). */
 esp_err_t board_lcd_draw(int x0, int y0, int x1, int y1, const void *px);
 
+/* Called from the SPI transfer-done ISR when an async draw has finished. */
+typedef void (*board_lcd_done_cb_t)(void *ctx);
+
+/* Start a draw and return; done(ctx) runs in ISR context once the buffer may
+ * be reused. Waits (up to 500 ms) while a capture holds the radio-quiet token. */
+esp_err_t board_lcd_draw_async(int x0, int y0, int x1, int y1, const void *px, board_lcd_done_cb_t done, void *ctx);
+
+/* Radio-quiet window: blocks until no LCD transfer is in flight and keeps new
+ * ones from starting until board_rf_quiet_end(). Wrap each capture in it. */
+esp_err_t board_rf_quiet_begin(uint32_t timeout_ms);
+void board_rf_quiet_end(void);
+
 /* RGB565 value already byte-swapped for the panel's big-endian bus order. */
 static inline uint16_t board_rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
