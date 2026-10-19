@@ -17,6 +17,20 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # CONFIG_PM_ENABLE is not set
 
+# Receiver: same radio settings as esp-sdr's sdkconfig.defaults(.esp32c5).
+# The cert-test PHY library provides phy_stop_tx_tone() and the private RX
+# hooks the receiver uses; nothing here enables any transmit path.
+CONFIG_ESP_PHY_ENABLE_CERT_TEST=y
+CONFIG_ESP_PHY_DEBUG=y
+# Leave enough non-modem SRAM for static data and task stacks.
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_EXTRA_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_SLP_IRAM_OPT is not set
+# CONFIG_ESP_PHY_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
+# CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
+
 # PSRAM: LVGL and DSP buffers live here; internal SRAM is reserved for the
 # capture bank and Wi-Fi/PHY (see components/espsdr_rx).
 CONFIG_SPIRAM=y
