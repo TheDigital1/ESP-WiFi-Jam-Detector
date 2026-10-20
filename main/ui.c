@@ -1,15 +1,18 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Screen switching, BOOT button, alarm border and the refresh tick.
+ * Screen switching, BOOT button, alarm border and beep, battery polling and
+ * the refresh tick.
  */
 #include <stdio.h>
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "audio.h"
 #include "board.h"
 #include "detector.h"
+#include "settings.h"
 #include "lvgl_port.h"
 #include "ui.h"
 #include "ui_priv.h"
@@ -22,6 +25,8 @@ static const char *TAG = "ui";
 #define LONG_POLL     50 /* 1.5 s at BUTTON_MS */
 #define BORDER_PX     3
 #define FLASH_TICKS   5  /* border on/off every 500 ms */
+#define POWER_TICKS   50 /* battery read every 5 s */
+#define BEEP_REPEAT_MS 15000 /* while any band stays in ALARM */
 
 static lv_obj_t *s_scr[UI_SCREEN_COUNT];
 static ui_screen_t s_cur = UI_STATUS;
@@ -133,12 +138,29 @@ static void refresh_timer(lv_timer_t *t)
 {
     LV_UNUSED(t);
     static unsigned tick;
-    ui_snap_t s = {.sweep = sweep_state(), .now_ms = (uint32_t)(esp_timer_get_time() / 1000)};
+    static board_power_t power;
+    static bool power_ok, was_alarm;
+    static uint32_t beep_ms;
+    if (tick % POWER_TICKS == 0) {
+        power_ok = board_power_read(&power) == ESP_OK;
+    }
+    ui_snap_t s = {.sweep = sweep_state(), .now_ms = (uint32_t)(esp_timer_get_time() / 1000), .power = power,
+                   .power_ok = power_ok};
     bool alarm = false;
     for (int b = 0; b < BAND_COUNT; b++) {
         detector_get_status((band_id_t)b, &s.st[b]);
         alarm |= s.sweep == SWEEP_RUNNING && s.st[b].state == DETECT_ALARM;
     }
+    ui_spectrum_feed(&s);
+    if (alarm && (!was_alarm || s.now_ms - beep_ms >= BEEP_REPEAT_MS)) {
+        settings_t set;
+        settings_get(&set);
+        if (set.beep) {
+            audio_beep(3, 150, 100);
+        }
+        beep_ms = s.now_ms;
+    }
+    was_alarm = alarm;
     switch (s_cur) {
     case UI_STATUS:
         ui_status_update(&s);

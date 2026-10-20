@@ -11,6 +11,7 @@
 #include "esp_err.h"
 #include "lvgl.h"
 #include "bandplan.h"
+#include "board.h"
 #include "detect.h"
 #include "sweep.h"
 
@@ -26,6 +27,8 @@ typedef struct {
     detect_status_t st[BAND_COUNT];
     sweep_state_t sweep;
     uint32_t now_ms; /* same clock as the detector's times */
+    board_power_t power;
+    bool power_ok;
 } ui_snap_t;
 
 void ui_show(ui_screen_t screen);
@@ -48,6 +51,8 @@ void ui_status_update(const ui_snap_t *s);
 lv_obj_t *ui_spectrum_create(void);
 void ui_spectrum_enter(band_id_t band);
 void ui_spectrum_leave(void);
+/* Every tick, whatever is shown: keeps the waterfall history. */
+void ui_spectrum_feed(const ui_snap_t *s);
 void ui_spectrum_update(const ui_snap_t *s);
 
 lv_obj_t *ui_settings_create(void);

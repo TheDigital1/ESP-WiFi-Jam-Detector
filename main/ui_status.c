@@ -127,7 +127,13 @@ void ui_status_update(const ui_snap_t *s)
 {
     char text[96], d[16];
     ui_fmt_duration(d, sizeof(d), s->now_ms);
-    snprintf(text, sizeof(text), "up %s", d);
+    char pwr[32] = "";
+    if (s->power_ok && s->power.battery && s->power.percent >= 0) {
+        snprintf(pwr, sizeof(pwr), "%s %d%%   ", s->power.charging ? "charging" : "battery", s->power.percent);
+    } else if (s->power_ok && s->power.vbus) {
+        snprintf(pwr, sizeof(pwr), "USB   ");
+    }
+    snprintf(text, sizeof(text), "%sup %s", pwr, d);
     ui_set_text(s_uptime, text);
 
     for (int b = 0; b < BAND_COUNT; b++) {

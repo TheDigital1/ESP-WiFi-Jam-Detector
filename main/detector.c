@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "detector.h"
+#include "eventlog.h"
 #include "settings.h"
 #include "sweep.h"
 
@@ -164,6 +165,7 @@ static void detector_task(void *arg)
 
         const char *name = b->plan->name;
         if (changed) {
+            eventlog_post(b->plan->id, &ev);
             if (ev.from == DETECT_LEARNING && ev.to == DETECT_NORMAL) {
                 ESP_LOGI(TAG, "%s baseline learned (gain %u)", name, m->gain);
                 save_baseline(b, m->t_ms);

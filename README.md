@@ -9,9 +9,9 @@ It never transmits, injects or deauthenticates anything. It can show that the
 RF environment changed; it cannot prove intent. A microwave oven will look
 like interference on 2.4 GHz.
 
-Status: milestones M0–M5 done (board bring-up, receiver, full sweep, live
+Status: milestones M0–M6 done (board bring-up, receiver, full sweep, live
 spectrum, detection, status/spectrum/settings screens with settings kept in
-flash). Polish (beep, waterfall, SD logging, battery; M6) is next.
+flash, alarm beep, waterfall, TF-card event log, battery level).
 
 ## Build and flash
 
@@ -23,6 +23,7 @@ use that commit and nothing else:
 | ESP-IDF | `25fe69f946311abdaf9ad56591f25fedbc20ac98` (6.2-dev), from esp-sdr's `firmware-targets.json` (`esp32c5`) |
 | esp-sdr | `f86da81807b7f6e850742f6b789d9468c190ad41`, vendored in `components/espsdr_rx` |
 | LVGL | 9.5.0 (component manager) |
+| esp_codec_dev | 1.5.11 (component manager), as in Waveshare's factory demo |
 
 ```sh
 mkdir -p ~/esp/esp-idf-espsdr && cd ~/esp/esp-idf-espsdr
@@ -61,14 +62,29 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
 - **Spectrum:** the current average (cyan, filled), max-hold (orange) and the
   learned baseline (grey) in relative dB, with Wi-Fi channel ticks and U-NII
   labels. **2.4 / 5** switches band, **Reset max** clears max-hold.
+  **Waterfall** switches the plot to a scrolling history: one row per sweep,
+  newest at the top, coloured by dB above the baseline (dark blue −5 dB →
+  cyan → yellow → red +30 dB; absolute level while learning). The left margin
+  shows the age of the rows. History (236 sweeps, ~2–4 min) is kept for both
+  bands all the time.
 - **Settings:** three tabs (General, Detection, Timing) instead of a
   scrolling list, because a full-screen LVGL redraw costs ~80 ms of CPU here
   and scrolling ran at a few frames/s while starving the sweep. Re-learn,
   auto-range gain, defaults; detection thresholds, sweep weighting and
   brightness (applied when a slider is released, saved to
-  flash 2 s later or when leaving the screen); the alarm beep switch is stored
-  but the beep itself is M6.
-- Any ALARM flashes a red border on every screen.
+  flash 2 s later or when leaving the screen); alarm beep on/off and **Test**.
+  The General tab also shows the TF-card and power status.
+- Any ALARM flashes a red border on every screen. With **Alarm beep** on, it
+  also beeps three times (2 kHz) on entering ALARM and every 15 s while it
+  lasts. The codec, I2S and amplifier only run during a beep; with beeps
+  playing continuously the floor did not move (5 GHz within 0.1 dB, 2.4 GHz
+  within normal Wi-Fi variation), so a beep cannot keep an alarm going.
+- **Event log:** with a FAT-formatted TF card inserted (and DIP switch JP8
+  pin 2 ON, per Waveshare's BSP), every state change is appended to
+  `/jd_events.csv` on the card: boot number, uptime, band, from/to state,
+  kind and all detector metrics. The card is optional.
+- **Battery:** the status screen header shows `USB`, `battery NN%` or
+  `charging NN%` from the AXP2101 fuel gauge, read every 5 s.
 - **First boot:** the receiver auto-ranges its gain (~8 s) and stores it, then
   learns the baseline for 60 s and stores it. Keep the RF environment normal
   during learning: anything present then becomes "normal". **Later boots**
@@ -223,7 +239,12 @@ All of them also pass with other random seeds (`sim_spectra.py --seed`).
 - **Flash writes:** saving the 5 GHz baseline (~10 KB) takes up to ~0.6 s
   and can cost one 2.4 GHz sweep (logged as dropped).
 - **Alarm time** is uptime: the PCF85063 RTC is never set, because there is no
-  network time while the radio scans.
+  network time while the radio scans. The event log's `boot` column (a counter
+  in NVS) tells boots apart.
+- **TF-card writes** share SPI2 with the LCD and run inside the radio-quiet
+  window, so the sweep pauses for the write (typically tens of ms).
+- **Battery percentage** is the AXP2101's own fuel gauge, uncalibrated for
+  the attached cell; untested here without a battery fitted.
 - **No Wi-Fi networking:** while sweeping, the radio is retuned constantly, so
   normal Wi-Fi (scan/connect/AP) is not available.
 - Normal Wi-Fi start-up runs the PHY's own calibration once at boot, as on every
@@ -243,9 +264,11 @@ main/plot.c            spectrum renderer (host-tested)
 main/sweep.c           sweep task, auto-range, stitched spectra
 main/lvgl_port.c       LVGL display/touch glue, PSRAM allocator
 main/settings.c        settings, gains and baselines in NVS (jd_nvs partition)
+main/audio.c           alarm beep via ES8311 + NS4150B (esp_codec_dev)
+main/eventlog.c        TF-card CSV log of detector state changes
 main/ui.c              screen switching, BOOT button, alarm border
 main/ui_status.c       status screen (default)
-main/ui_spectrum.c     spectrum screen
+main/ui_spectrum.c     spectrum screen and waterfall
 main/ui_settings.c     settings screen
 main/characterize.c    optional receiver/LCD measurements (CONFIG_JD_CHARACTERIZE)
 test_host/             host unit tests

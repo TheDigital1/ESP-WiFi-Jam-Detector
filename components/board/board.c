@@ -3,10 +3,11 @@
  *
  * Board bring-up order follows Waveshare's BSP (esp32_c5_touch_lcd_3_5.c,
  * bsp_io_expander_init() and bsp_display_new()): I2C, then the CH32V006
- * expander pulses touch/LCD reset and enables P5, then the ST7796 is set up
- * over SPI2. The AXP2101 is not touched by Waveshare's BSP (its rail writes
- * are all commented out in 08_AXP2101/main/port_axp2101.cpp), so we only
- * read it.
+ * expander pulses touch/LCD reset, then the ST7796 is set up over SPI2.
+ * The audio PA (P5) stays off until a beep. The AXP2101's rails are not
+ * touched by Waveshare's BSP (its rail writes are all commented out in
+ * 08_AXP2101/main/port_axp2101.cpp), so we only read it, apart from enabling
+ * the battery voltage ADC as that example does.
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -37,6 +38,8 @@ static const char *TAG = "board";
 #define AXP_REG_DC_ONOFF  0x80
 #define AXP_REG_LDO_ONOFF 0x90
 #define AXP_REG_BAT_PCT   0xA4
+#define AXP_REG_ADC_CTRL  0x30 /* bit0: battery voltage ADC */
+#define AXP_REG_VBAT_H    0x34 /* bits 4:0, then 0x35: mV */
 #define AXP_CHIP_ID       0x4A
 
 /* FT6336 registers, from Waveshare's esp_lcd_touch_ft6336.c */
@@ -108,7 +111,7 @@ static esp_err_t exio_init(void)
     vTaskDelay(pdMS_TO_TICKS(50));
     ESP_RETURN_ON_ERROR(exio_set(BIT(BOARD_EXIO_TP_RST) | BIT(BOARD_EXIO_LCD_RST), false), TAG, "reset low");
     vTaskDelay(pdMS_TO_TICKS(50));
-    ESP_RETURN_ON_ERROR(exio_set(outputs, true), TAG, "reset release");
+    ESP_RETURN_ON_ERROR(exio_set(BIT(BOARD_EXIO_TP_RST) | BIT(BOARD_EXIO_LCD_RST), true), TAG, "reset release");
     vTaskDelay(pdMS_TO_TICKS(120)); /* ST7796 needs 120 ms after reset */
     ESP_LOGI(TAG, "expander ok: dir=0x%02x out=0x%02x", outputs, s_exio_out);
     return ESP_OK;
@@ -147,6 +150,32 @@ esp_err_t board_pmu_log(void)
              id, id == AXP_CHIP_ID ? "ok" : "UNEXPECTED", st[0], st[1], !!(st[0] & BIT(5)), !!(st[0] & BIT(3)),
              (st[1] >> 5) == 1, dc, ldo, pct);
     return ESP_OK;
+}
+
+esp_err_t board_power_read(board_power_t *out)
+{
+    uint8_t st[2], pct, v[2];
+    ESP_RETURN_ON_ERROR(reg_read(s_pmu, AXP_REG_STATUS1, st, 2), TAG, "AXP2101 status");
+    ESP_RETURN_ON_ERROR(reg_read(s_pmu, AXP_REG_BAT_PCT, &pct, 1), TAG, "AXP2101 percent");
+    ESP_RETURN_ON_ERROR(reg_read(s_pmu, AXP_REG_VBAT_H, v, 2), TAG, "AXP2101 voltage");
+    *out = (board_power_t){
+        .vbus = st[0] & BIT(5),
+        .battery = st[0] & BIT(3),
+        .charging = (st[1] >> 5) == 1,
+    };
+    out->percent = out->battery && pct <= 100 ? pct : -1;
+    out->battery_mv = out->battery ? (uint16_t)(((v[0] & 0x1F) << 8) | v[1]) : 0;
+    return ESP_OK;
+}
+
+esp_err_t board_pa_enable(bool on)
+{
+    return exio_set(BIT(BOARD_EXIO_PA_EN), on);
+}
+
+i2c_master_bus_handle_t board_i2c_bus(void)
+{
+    return s_bus;
 }
 
 esp_err_t board_backlight_set(uint8_t percent)
@@ -196,10 +225,11 @@ static esp_err_t lcd_init(board_orient_t orient)
     ESP_RETURN_ON_FALSE(s_lcd_done && s_rf_token && s_rf_done, ESP_ERR_NO_MEM, TAG, "no mem for LCD semaphores");
     xSemaphoreGive(s_rf_token);
 
-    /* Keep the TF card deselected while the LCD uses the shared bus. */
-    const gpio_config_t sd_cs = {.pin_bit_mask = BIT64(BOARD_SD_CS), .mode = GPIO_MODE_OUTPUT};
-    ESP_RETURN_ON_ERROR(gpio_config(&sd_cs), TAG, "SD CS config failed");
+    /* Keep the TF card deselected while the LCD uses the shared bus. Not
+     * gpio_config(): that reserves the pin, and the SDSPI driver takes it
+     * over later (main/eventlog.c). */
     ESP_RETURN_ON_ERROR(gpio_set_level(BOARD_SD_CS, 1), TAG, "SD CS high failed");
+    ESP_RETURN_ON_ERROR(gpio_set_direction(BOARD_SD_CS, GPIO_MODE_OUTPUT), TAG, "SD CS config failed");
 
     const spi_bus_config_t bus = {
         .sclk_io_num = BOARD_LCD_SCLK,
@@ -332,6 +362,13 @@ esp_err_t board_init(board_orient_t orient)
 
     ESP_RETURN_ON_ERROR(add_dev(BOARD_PMU_ADDR, &s_pmu), TAG, "add PMU failed");
     esp_err_t err = board_pmu_log();
+    if (err == ESP_OK) {
+        uint8_t adc = 0;
+        err = reg_read(s_pmu, AXP_REG_ADC_CTRL, &adc, 1);
+        if (err == ESP_OK && !(adc & BIT(0))) {
+            err = reg_write(s_pmu, AXP_REG_ADC_CTRL, adc | BIT(0));
+        }
+    }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "AXP2101 status unavailable: %s", esp_err_to_name(err));
     }

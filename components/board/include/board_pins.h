@@ -34,9 +34,10 @@
 #define BOARD_EXIO_REG_PWM    0x05  /* custom_io_expander_ch32v003.c: PWM_REG_ADDR (raw 0..255) */
 #define BOARD_EXIO_TP_RST     0     /* BSP_H:108 "Connected via IO expander P0"; ARD_IO:12 */
 #define BOARD_EXIO_LCD_RST    1     /* BSP_H:106 "Connected via IO expander P1"; ARD_IO:13 */
-#define BOARD_EXIO_PA_EN      5     /* 01_factory/components/bsp_extra/src/bsp_board_extra.c:26-30
-                                       (Audio_PA_EN); ARD_IO:14 names it BOARD_POWER_EXIO. BSP_C:384
-                                       drives it high at init, so we do the same. */
+#define BOARD_EXIO_PA_EN      5     /* 01_factory/components/bsp_extra/src/bsp_board_extra.c:24-31
+                                       (Audio_PA_EN / Audio_PA_DIS); ARD_IO:14 names it BOARD_POWER_EXIO.
+                                       BSP_C:384 drives it high at init; like the factory app we keep
+                                       the NS4150B off except while a beep plays (M6). */
 #define BOARD_EXIO_IN6        6     /* BSP_C:379 input; 01_factory/.../app_settings.cpp:48,131 */
 /* Backlight: expander PWM register, BSP_H:107 "Connected via IO expander PWM1"; BSP_C:577 */
 
@@ -69,9 +70,22 @@
                                              input + pull-up, active low (same file :112-119, :580) */
 /* PWR key goes to the AXP2101 PWRON pin (schematic net PWRON), not to a GPIO. */
 
-/* ---- I2S (ES8311 + NS4150B), for M6 only ---- */
+/* ---- I2S (ES8311 + NS4150B) ---- */
 #define BOARD_I2S_BCLK        GPIO_NUM_23 /* BSP_H:87 */
 #define BOARD_I2S_MCLK        GPIO_NUM_NC /* BSP_H:88 */
 #define BOARD_I2S_WS          GPIO_NUM_10 /* BSP_H:89 */
 #define BOARD_I2S_DOUT        GPIO_NUM_25 /* BSP_H:90 */
 #define BOARD_I2S_DIN         GPIO_NUM_24 /* BSP_H:91 */
+
+/* ES8311: I2C address ES8311_CODEC_DEFAULT_ADDR from esp_codec_dev (BSP_C:323),
+ * no MCLK (BSP_C:342 use_mclk = false; BSP_H:88), I2S slave (BSP_C:341),
+ * PA via the expander, not a GPIO (BSP_H:92 BSP_POWER_AMP_IO = NC),
+ * hw_gain pa 5.0 V / DAC 3.3 V (BSP_C:330-333). Playback as the factory app:
+ * 16 kHz, 16-bit mono (bsp_board_extra.c:101-105), volume 85
+ * (bsp_extra/include/bsp_board_extra.h:31). */
+
+/* ---- AXP2101 battery (registers from 08_AXP2101's XPowersLib, REG/AXP2101Constants.h) ---- */
+/* 0x00 STATUS1: bit5 VBUS good, bit3 battery present; 0x01 STATUS2: bits 7:5 = 1
+ * charging; 0x30 ADC_CHANNEL_CTRL bit0 = battery voltage ADC, which
+ * 08_AXP2101/main/port_axp2101.cpp:108 enables; 0x34/0x35 battery mV (H5/L8);
+ * 0xA4 fuel-gauge percent (XPowersAXP2101.tpp getBattVoltage/getBatteryPercent). */

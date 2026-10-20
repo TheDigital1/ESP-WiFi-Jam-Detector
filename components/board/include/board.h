@@ -2,13 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Board support for the Waveshare ESP32-C5-Touch-LCD-3.5: shared I2C bus,
- * CH32V006 IO expander (LCD/touch reset, backlight), AXP2101 status (read
- * only), ST7796 LCD in landscape, FT6336 touch and the BOOT button.
+ * CH32V006 IO expander (LCD/touch reset, backlight, audio PA), AXP2101
+ * status and battery, ST7796 LCD in landscape, FT6336 touch and the BOOT
+ * button.
  */
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "esp_lcd_types.h"
 
@@ -34,6 +36,22 @@ esp_err_t board_i2c_scan(void);
 
 /* Log AXP2101 identity and status. Reads registers only, never writes. */
 esp_err_t board_pmu_log(void);
+
+typedef struct {
+    bool vbus;           /* USB power present */
+    bool battery;        /* battery connected */
+    bool charging;
+    int percent;         /* fuel gauge, -1 without a battery */
+    uint16_t battery_mv;
+} board_power_t;
+
+esp_err_t board_power_read(board_power_t *out);
+
+/* NS4150B speaker amplifier (expander P5). */
+esp_err_t board_pa_enable(bool on);
+
+/* The shared I2C bus, for drivers that attach their own devices (ES8311). */
+i2c_master_bus_handle_t board_i2c_bus(void);
 
 esp_err_t board_backlight_set(uint8_t percent);
 

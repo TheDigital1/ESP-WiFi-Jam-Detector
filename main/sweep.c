@@ -21,7 +21,7 @@ static const char *TAG = "sweep";
 #define TASK_PRIO        10    /* below the LVGL task (11, short I/O-bound bursts) */
 #define CAPTURE_PRIO     12    /* only while a capture holds the radio-quiet window */
 #define TASK_STACK       4096
-#define QUIET_TIMEOUT_MS 200
+#define QUIET_TIMEOUT_MS 1000 /* an LCD strip takes ~5 ms; a TF card write can take ~100+ ms */
 #define STATS_PERIOD_US  10000000
 /* Auto-range: step down until clipping stays at or below CLIP_MAX_PPM over
  * the probe, then back off AUTORANGE_MARGIN more indices (bursts that the

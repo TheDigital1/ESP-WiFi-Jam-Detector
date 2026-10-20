@@ -1,4 +1,14 @@
 dependencies:
+  espressif/esp_codec_dev:
+    component_hash: df70f10af8d7b922add7b9d07372c9c97ab356e58d72b7a892050227c2d44348
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.5.11
   idf:
     source:
       type: idf
@@ -11,8 +21,9 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
+- espressif/esp_codec_dev
 - idf
 - lvgl/lvgl
-manifest_hash: f3608d9a0cd07760b56ac2b8de721aa736b3470ec5682ca26a5fdfdf023c5a75
+manifest_hash: 49b003ec90dc53353d037e8cd8a79432a4ad92355d5dcc42aaa57f9e6d735318
 target: esp32c5
 version: 3.0.0

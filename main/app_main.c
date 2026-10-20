@@ -4,9 +4,9 @@
  * esp-wifi-jammer-detector: receive-only RF interference / possible-jamming
  * detector for the Waveshare ESP32-C5-Touch-LCD-3.5.
  *
- * M5: band sweep, per-band interference detection against a learned
- * baseline, status / spectrum / settings screens, settings, auto-range gains
- * and baselines kept in flash.
+ * Band sweep, per-band interference detection against a learned baseline,
+ * status / spectrum + waterfall / settings screens, settings, gains and
+ * baselines kept in flash, alarm beep, TF-card event log, battery level.
  */
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
@@ -16,9 +16,11 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
+#include "audio.h"
 #include "board.h"
 #include "characterize.h"
 #include "detector.h"
+#include "eventlog.h"
 #include "espsdr_rx.h"
 #include "lvgl_port.h"
 #include "settings.h"
@@ -70,6 +72,11 @@ static esp_err_t start(void)
     settings_get(&set);
 
     ESP_RETURN_ON_ERROR(board_init(BOARD_ORIENT_LANDSCAPE), TAG, "board");
+    ESP_RETURN_ON_ERROR(eventlog_start(), TAG, "event log");
+    esp_err_t aerr = audio_init();
+    if (aerr != ESP_OK) {
+        ESP_LOGW(TAG, "no alarm beep: %s", esp_err_to_name(aerr)); /* not fatal */
+    }
     int64_t t0 = esp_timer_get_time();
     ESP_RETURN_ON_ERROR(rx_init(), TAG, "receiver");
     ESP_LOGI(TAG, "rx_init %" PRId64 " ms", (esp_timer_get_time() - t0) / 1000);

@@ -30,6 +30,8 @@ int settings_check(const settings_t *s);
 /* Opens the partition and loads the settings (defaults if none or invalid). */
 esp_err_t settings_init(void);
 void settings_get(settings_t *out);
+/* Boot counter, incremented by settings_init() (tags the SD event log). */
+uint32_t settings_boot(void);
 /* Validates, keeps and writes to flash (skipped when unchanged). */
 esp_err_t settings_set(const settings_t *s);
 

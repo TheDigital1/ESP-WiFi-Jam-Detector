@@ -19,4 +19,5 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 - M3 done (80 MS/s sweep, 48 MHz/tune, radio-quiet LCD window, live spectrum ~10 fps confirmed on device).
 - M4 done (baseline, min/mean/max detection, state machine, host sim tests; microwave/iperf checked on device).
 - M5 done (status/spectrum/settings screens, settings tabs, NVS settings + gains + baselines in jd_nvs).
-- Current milestone: M6
+- M6 done (alarm beep, waterfall, TF-card CSV event log, AXP2101 battery; all checked on device).
+- All brief milestones (M0-M6) complete.

@@ -12,7 +12,9 @@
  */
 #include <stdio.h>
 #include "esp_log.h"
+#include "audio.h"
 #include "board.h"
+#include "eventlog.h"
 #include "detector.h"
 #include "settings.h"
 #include "ui_priv.h"
@@ -200,6 +202,12 @@ static void beep_cb(lv_event_t *e)
     changed();
 }
 
+static void test_beep_cb(lv_event_t *e)
+{
+    LV_UNUSED(e);
+    audio_beep(3, 150, 100);
+}
+
 static void load_controls(void)
 {
     for (int f = 0; f < F_COUNT; f++) {
@@ -347,9 +355,12 @@ lv_obj_t *ui_settings_create(void)
         lv_obj_add_event_cb(sl, slider_cb, LV_EVENT_RELEASED, (void *)(uintptr_t)f);
         s_slider[f] = sl;
     }
-    lv_obj_t *row = add_row(s_page[P_GENERAL], "Alarm beep (M6)");
+    lv_obj_t *row = add_row(s_page[P_GENERAL], "Alarm beep");
     s_beep = lv_switch_create(row);
     lv_obj_align(s_beep, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_t *test = add_button(row, "Test", test_beep_cb);
+    lv_obj_set_size(test, 70, 32);
+    lv_obj_align(test, LV_ALIGN_RIGHT_MID, -80, 0);
     lv_obj_add_event_cb(s_beep, beep_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *hint = lv_label_create(s_page[P_GENERAL]);
@@ -376,7 +387,7 @@ void ui_settings_leave(void)
 
 void ui_settings_update(const ui_snap_t *s)
 {
-    char text[128];
+    char text[200], sd[64], pwr[48];
     sweep_view_t v[BAND_COUNT] = {0};
     for (int b = 0; b < BAND_COUNT; b++) {
         sweep_get_view((band_id_t)b, &v[b]);
@@ -384,9 +395,25 @@ void ui_settings_update(const ui_snap_t *s)
     if (s->sweep == SWEEP_AUTORANGE) {
         snprintf(text, sizeof(text), "auto-ranging gain...");
     } else {
-        snprintf(text, sizeof(text), "Gain: 2.4 GHz %u, 5 GHz %u (auto-ranged, stored). Baselines: %s / %s",
+        eventlog_status_t ev;
+        eventlog_get_status(&ev);
+        if (ev.mounted) {
+            snprintf(sd, sizeof(sd), "%u events logged%s, %u MB free", (unsigned)ev.written,
+                     ev.errors ? " (errors)" : "", (unsigned)(ev.free_kb / 1024));
+        } else {
+            snprintf(sd, sizeof(sd), "no card");
+        }
+        if (!s->power_ok) {
+            snprintf(pwr, sizeof(pwr), "unknown");
+        } else if (s->power.battery) {
+            snprintf(pwr, sizeof(pwr), "battery %d%% %.2f V%s", s->power.percent, s->power.battery_mv / 1000.0,
+                     s->power.charging ? ", charging" : "");
+        } else {
+            snprintf(pwr, sizeof(pwr), "USB, no battery");
+        }
+        snprintf(text, sizeof(text), "Gain 2.4 GHz %u, 5 GHz %u (stored). Baselines %s / %s.\nTF card: %s. Power: %s.",
                  v[BAND_24].gain, v[BAND_5].gain, s->st[BAND_24].state == DETECT_LEARNING ? "learning" : "learned",
-                 s->st[BAND_5].state == DETECT_LEARNING ? "learning" : "learned");
+                 s->st[BAND_5].state == DETECT_LEARNING ? "learning" : "learned", sd, pwr);
     }
     ui_set_text(s_info_label, text);
     if (s_dirty && lv_tick_elaps(s_changed_ms) >= SAVE_IDLE_MS) {

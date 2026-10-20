@@ -24,6 +24,7 @@ typedef struct {
 
 static const char *const s_base_key[BAND_COUNT] = {"base24", "base5"};
 static settings_t s_cur;
+static uint32_t s_boot;
 static SemaphoreHandle_t s_lock;
 
 void settings_default(settings_t *s)
@@ -92,6 +93,16 @@ esp_err_t settings_init(void)
     }
     ESP_RETURN_ON_ERROR(err, TAG, "init %s (partition table flashed?)", PARTITION);
 
+    nvs_handle_t h;
+    if (nvs_open_from_partition(PARTITION, NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_get_u32(h, "boot", &s_boot); /* stays 0 the first time */
+        s_boot++;
+        if (nvs_set_u32(h, "boot", s_boot) != ESP_OK || nvs_commit(h) != ESP_OK) {
+            ESP_LOGW(TAG, "boot counter not saved");
+        }
+        nvs_close(h);
+    }
+
     settings_default(&s_cur);
     stored_t st;
     size_t len = 0;
@@ -107,6 +118,11 @@ esp_err_t settings_init(void)
                  (unsigned)len);
     }
     return ESP_OK;
+}
+
+uint32_t settings_boot(void)
+{
+    return s_boot;
 }
 
 void settings_get(settings_t *out)
