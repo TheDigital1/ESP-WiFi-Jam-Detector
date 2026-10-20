@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "detector.h"
+#include "settings.h"
 #include "sweep.h"
 
 static const char *TAG = "detect";
@@ -20,6 +21,7 @@ static const char *TAG = "detect";
 #define TASK_STACK      4096
 #define STATUS_LOG_MS   10000
 #define SPECTRA         3 /* avg, min, max */
+#define SAVE_PERIOD_MS  (60u * 60u * 1000u) /* keep the stored baseline close to the EMA-tracked one */
 
 typedef struct {
     unsigned clipped, snapshots, gain, slices;
@@ -37,12 +39,16 @@ typedef struct {
     volatile bool busy[2];
     unsigned fill;
     uint32_t dropped, incomplete;
+    uint32_t saved_ms; /* last baseline save */
+    uint32_t logged_lost; /* dropped + incomplete at the last warning */
 } band_ctx_t;
 
 static band_ctx_t s_band[BAND_COUNT];
 static QueueHandle_t s_queue; /* (band << 1) | slot */
 static SemaphoreHandle_t s_lock;
 static volatile bool s_relearn;
+static uint8_t *s_rec; /* baseline record, PSRAM; detect task only (and start) */
+static size_t s_rec_cap;
 
 /* Sweep task context: copy and hand over, nothing else. */
 static void on_segment(const sweep_segment_t *seg, void *ctx)
@@ -98,6 +104,24 @@ static void log_metrics(esp_log_level_t level, const char *band, const char *wha
                   m->swept_cover_pct);
 }
 
+/* Detect task: the baseline only changes here, so no lock is needed to read it. */
+static void save_baseline(band_ctx_t *b, uint32_t t_ms)
+{
+    const size_t n = detect_save_baseline(&b->det, s_rec, s_rec_cap);
+    if (!n) {
+        return;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const esp_err_t err = settings_save_baseline(b->plan->id, s_rec, n);
+    b->saved_ms = t_ms;
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "%s baseline saved (%u bytes, %u ms)", b->plan->name, (unsigned)n,
+                 (unsigned)((esp_timer_get_time() - t0) / 1000));
+    } else {
+        ESP_LOGW(TAG, "%s baseline save: %s", b->plan->name, esp_err_to_name(err));
+    }
+}
+
 static void detector_task(void *arg)
 {
     (void)arg;
@@ -114,7 +138,8 @@ static void detector_task(void *arg)
                 detect_relearn(&s_band[i].det);
             }
             xSemaphoreGive(s_lock);
-            ESP_LOGI(TAG, "re-learning baselines");
+            const esp_err_t err = settings_erase_baselines();
+            ESP_LOGI(TAG, "re-learning baselines (stored ones erased: %s)", esp_err_to_name(err));
         }
         band_ctx_t *b = &s_band[item >> 1];
         const unsigned slot = item & 1u;
@@ -141,6 +166,7 @@ static void detector_task(void *arg)
         if (changed) {
             if (ev.from == DETECT_LEARNING && ev.to == DETECT_NORMAL) {
                 ESP_LOGI(TAG, "%s baseline learned (gain %u)", name, m->gain);
+                save_baseline(b, m->t_ms);
             } else if (ev.to == DETECT_LEARNING) {
                 ESP_LOGI(TAG, "%s gain changed to %u: re-learning baseline", name, m->gain);
             } else {
@@ -150,6 +176,9 @@ static void detector_task(void *arg)
                 log_metrics(ev.to >= DETECT_SUSPECT ? ESP_LOG_WARN : ESP_LOG_INFO, name, what, &ev.m);
             }
         }
+        if (st.state == DETECT_NORMAL && m->t_ms - b->saved_ms >= SAVE_PERIOD_MS) {
+            save_baseline(b, m->t_ms);
+        }
         if (m->t_ms - last_log[item >> 1] >= STATUS_LOG_MS) {
             last_log[item >> 1] = m->t_ms;
             if (st.state == DETECT_LEARNING) {
@@ -157,7 +186,8 @@ static void detector_task(void *arg)
             } else {
                 log_metrics(ESP_LOG_INFO, name, detect_state_name(st.state), &st.m);
             }
-            if (b->dropped || b->incomplete) {
+            if (b->dropped + b->incomplete != b->logged_lost) {
+                b->logged_lost = b->dropped + b->incomplete;
                 ESP_LOGW(TAG, "%s: %" PRIu32 " sweeps dropped (detector busy), %" PRIu32 " incomplete", name,
                          b->dropped, b->incomplete);
             }
@@ -180,6 +210,8 @@ esp_err_t detector_start(const detect_config_t *cfg)
         ESP_RETURN_ON_FALSE(mem, ESP_ERR_NO_MEM, TAG, "detector memory");
         ESP_RETURN_ON_FALSE(detect_init(&b->det, b->plan, cfg, mem, bytes) == 0, ESP_ERR_INVALID_ARG, TAG,
                             "detect init");
+        const size_t rec = detect_baseline_bytes(b->plan);
+        s_rec_cap = rec > s_rec_cap ? rec : s_rec_cap;
         for (int s = 0; s < 2; s++) {
             for (int k = 0; k < SPECTRA; k++) {
                 b->spec[s][k] = heap_caps_calloc(b->plan->n_bins, sizeof(int16_t), MALLOC_CAP_SPIRAM);
@@ -188,6 +220,19 @@ esp_err_t detector_start(const detect_config_t *cfg)
         }
         ESP_LOGI(TAG, "%s: %u cells of %u bins, %u KB working memory", b->plan->name, b->det.n_cells,
                  DETECT_CELL_BINS, (unsigned)(bytes / 1024));
+    }
+    s_rec = heap_caps_malloc(s_rec_cap, MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_rec, ESP_ERR_NO_MEM, TAG, "baseline record");
+    for (int i = 0; i < BAND_COUNT; i++) {
+        band_ctx_t *b = &s_band[i];
+        size_t len = 0;
+        esp_err_t err = settings_load_baseline((band_id_t)i, s_rec, s_rec_cap, &len);
+        if (err == ESP_OK && detect_load_baseline(&b->det, s_rec, len) == 0) {
+            ESP_LOGI(TAG, "%s: stored baseline restored (re-learns if the gain differs)", b->plan->name);
+        } else {
+            ESP_LOGI(TAG, "%s: no usable stored baseline (%s), learning", b->plan->name,
+                     err == ESP_OK ? "mismatch" : esp_err_to_name(err));
+        }
     }
     ESP_LOGI(TAG, "learn %u s; wideband %.1f dB in %u%% of cells; narrowband %.1f dB in %u%% of sweeps; "
              "swept %.1f dB over %u%% of band; alarm after %u s at %u%% duty, clear after %u s",
@@ -213,6 +258,17 @@ esp_err_t detector_get_baseline(band_id_t band, int16_t *out)
     ESP_RETURN_ON_FALSE(band < BAND_COUNT && out && s_lock, ESP_ERR_INVALID_ARG, TAG, "bad args");
     xSemaphoreTake(s_lock, portMAX_DELAY);
     detect_get_baseline(&s_band[band].det, out);
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
+esp_err_t detector_set_config(const detect_config_t *cfg)
+{
+    ESP_RETURN_ON_FALSE(cfg && detect_check_config(cfg) == 0 && s_lock, ESP_ERR_INVALID_ARG, TAG, "bad config");
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < BAND_COUNT; i++) {
+        detect_set_config(&s_band[i].det, cfg);
+    }
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }

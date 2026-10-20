@@ -591,6 +591,7 @@ bool detect_sweep(detect_t *d, const detect_input_t *in, detect_event_t *ev)
             d->st.kind = strongest(bits & DETECT_EV_STRONG);
             d->st.alarms++;
             d->st.last_alarm_ms = t;
+            d->st.last_alarm_kind = d->st.kind;
         } else if (t - d->last_ev_ms >= hold_ms) {
             d->st.state = DETECT_NORMAL;
             d->st.kind = DETECT_NONE;
@@ -643,6 +644,74 @@ void detect_get_baseline(const detect_t *d, int16_t *out_cdb)
     for (unsigned k = 0; k < d->n_bins; k++) {
         out_cdb[k] = q8_cdb(d->base_q8[k]);
     }
+}
+
+#define BASELINE_MAGIC   0x4c42444au /* "JDBL" */
+#define BASELINE_VERSION 1u
+
+typedef struct {
+    uint32_t magic, version;
+    uint32_t start_khz, res_hz;
+    uint16_t n_bins, n_cells;
+    uint16_t gain, reserved;
+} baseline_hdr_t; /* then base_q8[n_bins], cell_q8[0][n_cells], cell_q8[1][n_cells] */
+
+size_t detect_baseline_bytes(const band_plan_t *plan)
+{
+    return sizeof(baseline_hdr_t) + ((size_t)plan->n_bins + 2u * cells_of(plan->n_bins)) * sizeof(int32_t);
+}
+
+size_t detect_save_baseline(const detect_t *d, void *buf, size_t len)
+{
+    const size_t need = detect_baseline_bytes(d->plan);
+    if (d->st.state == DETECT_LEARNING || !buf || len < need) {
+        return 0;
+    }
+    const baseline_hdr_t h = {
+        .magic = BASELINE_MAGIC,
+        .version = BASELINE_VERSION,
+        .start_khz = d->plan->start_khz,
+        .res_hz = d->plan->res_hz,
+        .n_bins = (uint16_t)d->n_bins,
+        .n_cells = (uint16_t)d->n_cells,
+        .gain = (uint16_t)d->gain,
+    };
+    uint8_t *p = buf;
+    memcpy(p, &h, sizeof(h));
+    p += sizeof(h);
+    memcpy(p, d->base_q8, d->n_bins * sizeof(int32_t));
+    p += d->n_bins * sizeof(int32_t);
+    for (int s = 0; s < 2; s++) {
+        memcpy(p, d->cell_q8[s], d->n_cells * sizeof(int32_t));
+        p += d->n_cells * sizeof(int32_t);
+    }
+    return need;
+}
+
+int detect_load_baseline(detect_t *d, const void *buf, size_t len)
+{
+    baseline_hdr_t h;
+    if (!buf || len != detect_baseline_bytes(d->plan)) {
+        return -1;
+    }
+    memcpy(&h, buf, sizeof(h));
+    if (h.magic != BASELINE_MAGIC || h.version != BASELINE_VERSION || h.start_khz != d->plan->start_khz ||
+        h.res_hz != d->plan->res_hz || h.n_bins != d->n_bins || h.n_cells != d->n_cells) {
+        return -1;
+    }
+    detect_relearn(d); /* clear histories and the tracker */
+    const uint8_t *p = (const uint8_t *)buf + sizeof(h);
+    memcpy(d->base_q8, p, d->n_bins * sizeof(int32_t));
+    p += d->n_bins * sizeof(int32_t);
+    for (int s = 0; s < 2; s++) {
+        memcpy(d->cell_q8[s], p, d->n_cells * sizeof(int32_t));
+        p += d->n_cells * sizeof(int32_t);
+    }
+    d->learn_started = true;
+    d->gain = h.gain;
+    d->st.state = DETECT_NORMAL;
+    d->st.learn_pct = 100;
+    return 0;
 }
 
 const char *detect_state_name(detect_state_t s)

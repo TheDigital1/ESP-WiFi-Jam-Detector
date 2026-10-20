@@ -18,4 +18,5 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 - M2 done (espsdr_rx vendored; 2437/5500 capture, floor/peak, clipping + auto-range prototype verified).
 - M3 done (80 MS/s sweep, 48 MHz/tune, radio-quiet LCD window, live spectrum ~10 fps confirmed on device).
 - M4 done (baseline, min/mean/max detection, state machine, host sim tests; microwave/iperf checked on device).
-- Current milestone: M5
+- M5 done (status/spectrum/settings screens, settings tabs, NVS settings + gains + baselines in jd_nvs).
+- Current milestone: M6

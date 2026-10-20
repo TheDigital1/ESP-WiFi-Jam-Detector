@@ -2,3 +2,6 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 4M,
+# Settings, auto-range gains and learned baselines (main/settings.c): a 5 GHz
+# baseline is ~10 KB, too big to sit next to the PHY data in "nvs".
+jd_nvs,   data, nvs,     0x410000, 256K,

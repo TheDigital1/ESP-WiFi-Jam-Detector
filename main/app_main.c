@@ -4,8 +4,9 @@
  * esp-wifi-jammer-detector: receive-only RF interference / possible-jamming
  * detector for the Waveshare ESP32-C5-Touch-LCD-3.5.
  *
- * M4: full band plan sweep, live spectrum, and per-band interference
- * detection against a learned baseline.
+ * M5: band sweep, per-band interference detection against a learned
+ * baseline, status / spectrum / settings screens, settings, auto-range gains
+ * and baselines kept in flash.
  */
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
@@ -20,6 +21,7 @@
 #include "detector.h"
 #include "espsdr_rx.h"
 #include "lvgl_port.h"
+#include "settings.h"
 #include "sweep.h"
 #include "ui.h"
 
@@ -40,6 +42,21 @@ static void log_memory(const char *when)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
 
+/* Sweep task: store the gains and learn baselines at them. */
+static void on_autorange(const unsigned gain[BAND_COUNT])
+{
+    settings_t s;
+    settings_get(&s);
+    for (int b = 0; b < BAND_COUNT; b++) {
+        s.gain[b] = (uint8_t)gain[b];
+    }
+    esp_err_t err = settings_set(&s);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "storing gains: %s", esp_err_to_name(err));
+    }
+    detector_relearn();
+}
+
 static esp_err_t start(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -48,6 +65,9 @@ static esp_err_t start(void)
         err = nvs_flash_init();
     }
     ESP_RETURN_ON_ERROR(err, TAG, "nvs init");
+    ESP_RETURN_ON_ERROR(settings_init(), TAG, "settings");
+    settings_t set;
+    settings_get(&set);
 
     ESP_RETURN_ON_ERROR(board_init(BOARD_ORIENT_LANDSCAPE), TAG, "board");
     int64_t t0 = esp_timer_get_time();
@@ -59,23 +79,25 @@ static esp_err_t start(void)
 #endif
 
     /* 80 MS/s, widest analog filter, central 48 MHz per tune: the flattest
-     * usable span measured in M3 (CONFIG_JD_CHARACTERIZE). */
-    const sweep_config_t cfg = {
+     * usable span measured in M3 (CONFIG_JD_CHARACTERIZE).
+     * Gains come from the first boot's auto-range (stored), or Settings. */
+    sweep_config_t cfg = {
         .rate = RX_RATE_80M,
         .bw_mhz = 0,
         .usable_hz = 48000000,
         .snapshots = 4,
-        .weight = {[BAND_24] = 2, [BAND_5] = 1},
-        .gain = {[BAND_24] = SWEEP_GAIN_AUTO, [BAND_5] = SWEEP_GAIN_AUTO},
         .yield_pct = 10, /* for detect + IDLE; the UI task outranks the sweep */
+        .on_autorange = on_autorange,
     };
+    for (int b = 0; b < BAND_COUNT; b++) {
+        cfg.weight[b] = set.weight[b];
+        cfg.gain[b] = set.gain[b] == SETTINGS_GAIN_NONE ? SWEEP_GAIN_AUTO : set.gain[b];
+    }
     ESP_RETURN_ON_ERROR(sweep_start(&cfg), TAG, "sweep");
-    detect_config_t dcfg;
-    detect_default_config(&dcfg);
-    ESP_RETURN_ON_ERROR(detector_start(&dcfg), TAG, "detector");
+    ESP_RETURN_ON_ERROR(detector_start(&set.det), TAG, "detector");
     ESP_RETURN_ON_ERROR(lvp_init(), TAG, "lvgl");
     ESP_RETURN_ON_ERROR(ui_init(), TAG, "ui");
-    ESP_RETURN_ON_ERROR(board_backlight_set(80), TAG, "backlight");
+    ESP_RETURN_ON_ERROR(board_backlight_set(set.brightness), TAG, "backlight");
     return ESP_OK;
 }
 

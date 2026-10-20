@@ -113,6 +113,7 @@ typedef struct {
     uint32_t state_since_ms;
     uint32_t last_alarm_ms; /* start of the latest ALARM */
     uint32_t alarms;        /* ALARM entries since init */
+    detect_kind_t last_alarm_kind;
     detect_metrics_t m;
 } detect_status_t;
 
@@ -183,6 +184,16 @@ bool detect_sweep(detect_t *d, const detect_input_t *in, detect_event_t *ev);
 void detect_get_status(const detect_t *d, detect_status_t *out);
 /* Per-bin baseline in cdB (meaningless while LEARNING). */
 void detect_get_baseline(const detect_t *d, int16_t *out_cdb);
+
+/* Learned baseline as a self-describing record (plan geometry and gain), so
+ * it can be stored and restored across reboots. */
+size_t detect_baseline_bytes(const band_plan_t *plan);
+/* Fills buf; returns the record size, or 0 while LEARNING or if len is short. */
+size_t detect_save_baseline(const detect_t *d, void *buf, size_t len);
+/* Restores a record from detect_save_baseline() for the same plan and goes
+ * to NORMAL; a later sweep at a different gain re-learns as usual.
+ * Returns 0, or -1 if the record does not match (state unchanged). */
+int detect_load_baseline(detect_t *d, const void *buf, size_t len);
 
 const char *detect_state_name(detect_state_t s);
 const char *detect_kind_name(detect_kind_t k);

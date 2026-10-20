@@ -14,7 +14,10 @@
 
 static const char *TAG = "lvgl";
 
-#define BUF_ROWS   20 /* one chunk = 480 x 20 px = 19.2 KB, ~2.6 ms on the 60 MHz bus */
+/* One chunk = 480 x 40 px = 38.4 KB, ~5 ms on the 60 MHz bus. LVGL walks the
+ * whole object tree per chunk: 40 rows instead of 20 renders a full-screen
+ * redraw ~20 % faster (M5, settings screen). */
+#define BUF_ROWS   40
 /* Above the sweep (10). LVGL work here is short and mostly waiting on LCD DMA
  * (>= 5 ms sleep per loop, ~10-20 ms CPU per frame); below the sweep it was
  * starved for latency by the 25 ms 5 GHz retunes and managed ~1 frame/s. */

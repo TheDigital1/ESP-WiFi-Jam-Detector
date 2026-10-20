@@ -23,6 +23,8 @@ typedef struct {
     unsigned weight[BAND_COUNT];  /* sweeps of each band per schedule round */
     unsigned gain[BAND_COUNT];    /* manual gain index, or SWEEP_GAIN_AUTO */
     unsigned yield_pct;           /* CPU share left to other tasks (UI, detect, idle), 0..90 */
+    /* Called from the sweep task after every auto-range, with the gains now in use. */
+    void (*on_autorange)(const unsigned gain[BAND_COUNT]);
 } sweep_config_t;
 
 /* One tune's result, passed to the segment callback (the detector). */
@@ -70,6 +72,10 @@ const band_plan_t *sweep_plan(band_id_t band);
 /* Copy the latest stitched spectra; out->*_cdb must hold n_bins entries. */
 esp_err_t sweep_get_view(band_id_t band, sweep_view_t *out);
 void sweep_reset_maxhold(band_id_t band);
+/* Schedule weights, from the next round on (1..8 each). */
+esp_err_t sweep_set_weights(const unsigned weight[BAND_COUNT]);
+/* Auto-range both bands again after the current sweep. */
+void sweep_autorange(void);
 
 /* Called from the sweep task after every tune. Keep it short; copy and queue. */
 void sweep_set_segment_cb(sweep_segment_cb_t cb, void *ctx);

@@ -68,6 +68,7 @@ static void budget_yield(int64_t work_start_us)
 static band_state_t s_band[BAND_COUNT];
 static SemaphoreHandle_t s_lock;
 static volatile sweep_state_t s_state = SWEEP_IDLE;
+static volatile bool s_autorange;
 static sweep_segment_cb_t s_seg_cb;
 static void *s_seg_ctx;
 
@@ -238,25 +239,47 @@ static esp_err_t sweep_band(band_state_t *b)
     return ESP_OK;
 }
 
+/* Auto-range the bands set to SWEEP_GAIN_AUTO (all of them when forced). */
+static esp_err_t autorange(bool all)
+{
+    s_state = SWEEP_AUTORANGE;
+    bool ranged = false;
+    unsigned gain[BAND_COUNT];
+    for (int i = 0; i < BAND_COUNT; i++) {
+        unsigned g = s_band[i].gain;
+        if (all || s_cfg.gain[i] == SWEEP_GAIN_AUTO) {
+            ESP_RETURN_ON_ERROR(autorange_band(&s_band[i]), TAG, "auto-range");
+            g = s_band[i].gain;
+            ranged = true;
+        } else {
+            g = s_cfg.gain[i];
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_band[i].gain = gain[i] = g;
+        s_band[i].valid = false; /* the view restarts at the new gain */
+        memset(s_band[i].hold_cdb, 0, s_band[i].plan.n_bins * sizeof(int16_t));
+        xSemaphoreGive(s_lock);
+    }
+    s_state = SWEEP_RUNNING;
+    if (ranged && s_cfg.on_autorange) {
+        s_cfg.on_autorange(gain);
+    }
+    return ESP_OK;
+}
+
 static void sweep_task(void *arg)
 {
-    esp_err_t err = ESP_OK;
-    s_state = SWEEP_AUTORANGE;
-    for (int i = 0; i < BAND_COUNT && err == ESP_OK; i++) {
-        if (s_cfg.gain[i] == SWEEP_GAIN_AUTO) {
-            err = autorange_band(&s_band[i]);
-        } else {
-            s_band[i].gain = s_cfg.gain[i];
-        }
-    }
-    s_state = err == ESP_OK ? SWEEP_RUNNING : SWEEP_FAILED;
-
+    esp_err_t err = autorange(false);
     int64_t window_start = esp_timer_get_time();
     while (err == ESP_OK) {
         for (int i = 0; i < BAND_COUNT && err == ESP_OK; i++) {
-            for (unsigned w = 0; w < s_cfg.weight[i] && err == ESP_OK; w++) {
+            for (unsigned w = 0; w < s_cfg.weight[i] && err == ESP_OK && !s_autorange; w++) {
                 err = sweep_band(&s_band[i]);
             }
+        }
+        if (s_autorange && err == ESP_OK) {
+            s_autorange = false;
+            err = autorange(true);
         }
         int64_t now = esp_timer_get_time();
         if (now - window_start >= STATS_PERIOD_US) {
@@ -294,6 +317,9 @@ esp_err_t sweep_start(const sweep_config_t *cfg)
 {
     ESP_RETURN_ON_FALSE(cfg->snapshots >= 1 && rx_rate_hz(cfg->rate) && cfg->yield_pct <= 90, ESP_ERR_INVALID_ARG,
                         TAG, "bad config");
+    for (int i = 0; i < BAND_COUNT; i++) {
+        ESP_RETURN_ON_FALSE(cfg->weight[i] >= 1 && cfg->weight[i] <= 8, ESP_ERR_INVALID_ARG, TAG, "bad weight");
+    }
     s_cfg = *cfg;
     s_lock = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_lock, ESP_ERR_NO_MEM, TAG, "lock");
@@ -385,6 +411,22 @@ void sweep_reset_maxhold(band_id_t band)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     memcpy(b->hold_cdb, b->max_cdb, b->plan.n_bins * sizeof(int16_t));
     xSemaphoreGive(s_lock);
+}
+
+esp_err_t sweep_set_weights(const unsigned weight[BAND_COUNT])
+{
+    for (int i = 0; i < BAND_COUNT; i++) {
+        ESP_RETURN_ON_FALSE(weight[i] >= 1 && weight[i] <= 8, ESP_ERR_INVALID_ARG, TAG, "bad weight");
+    }
+    for (int i = 0; i < BAND_COUNT; i++) {
+        s_cfg.weight[i] = weight[i]; /* read once per round by the sweep task */
+    }
+    return ESP_OK;
+}
+
+void sweep_autorange(void)
+{
+    s_autorange = true;
 }
 
 void sweep_set_segment_cb(sweep_segment_cb_t cb, void *ctx)

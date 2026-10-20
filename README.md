@@ -9,8 +9,9 @@ It never transmits, injects or deauthenticates anything. It can show that the
 RF environment changed; it cannot prove intent. A microwave oven will look
 like interference on 2.4 GHz.
 
-Status: milestones M0–M4 done (board bring-up, receiver, full sweep, live
-spectrum, detection). The full UI with status/settings screens (M5) is next.
+Status: milestones M0–M5 done (board bring-up, receiver, full sweep, live
+spectrum, detection, status/spectrum/settings screens with settings kept in
+flash). Polish (beep, waterfall, SD logging, battery; M6) is next.
 
 ## Build and flash
 
@@ -37,6 +38,11 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
+`idf.py flash` also writes the partition table. Settings, gains and baselines
+live in their own NVS partition, `jd_nvs` (256 KB at 0x410000); to start from
+scratch, erase it with `parttool.py --port /dev/ttyACM0 erase_partition
+--partition-name jd_nvs` (or `idf.py erase-flash`).
+
 On Linux, ModemManager may grab the board's USB port and reset it. Stop it, or
 add a udev rule with `ENV{ID_MM_DEVICE_IGNORE}="1"` for USB vendor `303a`.
 
@@ -46,15 +52,28 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
 
 ## Using it
 
-- The spectrum screen shows the current average (cyan, filled), max-hold
-  (orange) and the learned baseline (grey) in relative dB. The header shows the
-  shown band's detector state in colour (grey learning, green normal, amber
-  suspect, red interference); the other band's state is at the top right.
-- **BOOT** short press switches between 2.4 GHz and 5 GHz; **long press
-  (1.5 s)** re-learns both baselines. **Reset max** clears max-hold.
-- At power-up the receiver auto-ranges its gain (~8 s), then learns the
-  baseline for 60 s. Keep the RF environment normal during learning: anything
-  present then becomes "normal".
+- **BOOT** short press cycles the screens: status → spectrum → settings.
+  **Long press (1.5 s)** re-learns both baselines from any screen.
+- **Status** (default): one tile per band, coloured by state (grey learning,
+  green normal, amber suspect, red interference), with the floor rise against
+  the baseline, an evidence-duty bar (ALARM needs 80 %), the last alarm (as
+  uptime) and the sweep rate. Tap a tile for its spectrum.
+- **Spectrum:** the current average (cyan, filled), max-hold (orange) and the
+  learned baseline (grey) in relative dB, with Wi-Fi channel ticks and U-NII
+  labels. **2.4 / 5** switches band, **Reset max** clears max-hold.
+- **Settings:** three tabs (General, Detection, Timing) instead of a
+  scrolling list, because a full-screen LVGL redraw costs ~80 ms of CPU here
+  and scrolling ran at a few frames/s while starving the sweep. Re-learn,
+  auto-range gain, defaults; detection thresholds, sweep weighting and
+  brightness (applied when a slider is released, saved to
+  flash 2 s later or when leaving the screen); the alarm beep switch is stored
+  but the beep itself is M6.
+- Any ALARM flashes a red border on every screen.
+- **First boot:** the receiver auto-ranges its gain (~8 s) and stores it, then
+  learns the baseline for 60 s and stores it. Keep the RF environment normal
+  during learning: anything present then becomes "normal". **Later boots**
+  restore both and are watching within ~3 s; re-learn (long press) after
+  moving the device. **Auto-range gain** in Settings re-ranges and re-learns.
 
 ## How it works
 
@@ -89,9 +108,11 @@ band spectrum. The schedule sweeps 2.4 GHz twice for every 5 GHz sweep.
 ### Gain
 
 Gain is fixed per band while sweeping: hardware AGC would hide a raised noise
-floor. At start-up an auto-range steps down from the top gain index until
+floor. On first boot (or from Settings) an auto-range steps down from the top gain index until
 clipping across the whole band is at most 100 ppm of samples, then backs off
-2 more indices. Typical result here: 2.4 GHz ≈ 65–70, 5 GHz ≈ 81.
+2 more indices. Typical result here: 2.4 GHz ≈ 65–70, 5 GHz ≈ 81. The result
+is stored and reused at every boot, because a baseline is only valid at the
+gain it was learned at.
 
 ### Measured timing (M3, this board)
 
@@ -101,6 +122,9 @@ clipping across the whole band is at most 100 ppm of samples, then backs off
 | Full 5 GHz sweep | ~1.3 s |
 | Per tune | retune + DC recalibration ~25–30 ms at 5 GHz (~7 ms at 2.4 GHz), ~2–5 ms per snapshot, ~2 ms FFT per snapshot |
 | Spectrum display | ~10 frames/s |
+
+On the status and settings screens the UI uses much less CPU, so sweeps run
+faster (M5: ~0.08 s and ~0.83 s).
 
 ### Self-interference and the radio-quiet window
 
@@ -193,8 +217,13 @@ All of them also pass with other random seeds (`sim_spectra.py --seed`).
 - **Swept detection** needs the sweep to be slow compared with our own
   sweep (seconds per pass); a fast sweep looks like wideband or pulsed
   energy instead.
-- **Baseline at boot:** the baseline is re-learned at every boot for now, so
-  interference present then is learned as normal (M5 will persist it).
+- **Stored baseline:** the baseline from the last learning (refreshed hourly
+  from the slow EMA) is restored at boot. After moving the device to a
+  different RF environment, re-learn, or it may alarm or miss things.
+- **Flash writes:** saving the 5 GHz baseline (~10 KB) takes up to ~0.6 s
+  and can cost one 2.4 GHz sweep (logged as dropped).
+- **Alarm time** is uptime: the PCF85063 RTC is never set, because there is no
+  network time while the radio scans.
 - **No Wi-Fi networking:** while sweeping, the radio is retuned constantly, so
   normal Wi-Fi (scan/connect/AP) is not available.
 - Normal Wi-Fi start-up runs the PHY's own calibration once at boot, as on every
@@ -213,7 +242,11 @@ main/detector.c        detector task: assembles band spectra, logs transitions
 main/plot.c            spectrum renderer (host-tested)
 main/sweep.c           sweep task, auto-range, stitched spectra
 main/lvgl_port.c       LVGL display/touch glue, PSRAM allocator
-main/ui.c              screens
+main/settings.c        settings, gains and baselines in NVS (jd_nvs partition)
+main/ui.c              screen switching, BOOT button, alarm border
+main/ui_status.c       status screen (default)
+main/ui_spectrum.c     spectrum screen
+main/ui_settings.c     settings screen
 main/characterize.c    optional receiver/LCD measurements (CONFIG_JD_CHARACTERIZE)
 test_host/             host unit tests
 tools/sim_spectra.py   synthetic spectra for the detector tests

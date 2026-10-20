@@ -272,6 +272,38 @@ static void test_config_and_api(void)
     detect_get_baseline(&d, base);
     CHECK(base[0] == 3000 && base[p->n_bins - 1] == 3000, "baseline %d %d", base[0], base[p->n_bins - 1]);
 
+    /* Baseline record: round trip into a fresh detector; wrong plan rejected. */
+    {
+        static uint8_t rec[64 * 1024];
+        const size_t n = detect_save_baseline(&d, rec, sizeof(rec));
+        CHECK(n == detect_baseline_bytes(p) && n > 0, "baseline record %zu bytes", n);
+        CHECK(detect_save_baseline(&d, rec, n - 1) == 0, "short record buffer rejected");
+        detect_t d2;
+        CHECK(detect_init(&d2, p, &cfg, s_mem[1], detect_mem_bytes(p)) == 0, "init 2");
+        CHECK(detect_save_baseline(&d2, rec + n, sizeof(rec) - n) == 0, "no record while learning");
+        CHECK(detect_load_baseline(&d2, rec, n - 1) != 0, "truncated record rejected");
+        CHECK(detect_load_baseline(&d2, rec, n) == 0, "record loads");
+        int16_t base2[BP_MAX_BINS];
+        detect_get_baseline(&d2, base2);
+        detect_get_status(&d2, &st);
+        CHECK(st.state == DETECT_NORMAL && !memcmp(base, base2, p->n_bins * sizeof(int16_t)), "restored baseline");
+        detect_t d5;
+        const band_plan_t *p5 = &s_plan[BAND_5];
+        CHECK(detect_init(&d5, p5, &cfg, s_mem[1], detect_mem_bytes(p5)) == 0, "init 5");
+        CHECK(detect_load_baseline(&d5, rec, n) != 0, "2.4 GHz record rejected by the 5 GHz plan");
+        detect_get_status(&d5, &st);
+        CHECK(st.state == DETECT_LEARNING, "5 GHz still learning");
+        /* Restored at gain 60; a sweep at another gain re-learns. */
+        CHECK(detect_init(&d2, p, &cfg, s_mem[1], detect_mem_bytes(p)) == 0 && detect_load_baseline(&d2, rec, n) == 0,
+              "reload");
+        detect_input_t g = in;
+        g.gain = 50;
+        g.t_ms = 6000;
+        detect_sweep(&d2, &g, &ev);
+        detect_get_status(&d2, &st);
+        CHECK(st.state == DETECT_LEARNING, "restored baseline at another gain -> %s", detect_state_name(st.state));
+    }
+
     /* A steady +20 dB tone: SUSPECT, then ALARM after hold_s, NORMAL clear_s after it stops. */
     memcpy(tone, flat, sizeof(tone));
     tone[100] = 5000;
