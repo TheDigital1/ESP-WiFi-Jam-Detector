@@ -122,6 +122,16 @@ static void test_dc_notch_and_reduce(void)
         CHECK(abs(a[k] - dsp_cdb(250)) <= 1, "reduce avg %d: %d", k, a[k]);
         CHECK(m[k] == dsp_cdb(100 + 4 * k + 3), "reduce max %d: %d", k, m[k]);
     }
+    /* Grid min over two snapshots: the second is lower only in grid bin 3. */
+    static uint32_t gmin[64];
+    dsp_reduce_min(power, 100, 4, 10, gmin, 1);
+    for (unsigned j = 0; j < n; j++) {
+        power[j] = j >= 112 && j < 116 ? 10 : 1000;
+    }
+    dsp_reduce_min(power, 100, 4, 10, gmin, 0);
+    for (int k = 0; k < 10; k++) {
+        CHECK(gmin[k] == (k == 3 ? 10u : 250u), "reduce min %d: %u", k, (unsigned)gmin[k]);
+    }
 }
 
 static int cmp16(const void *a, const void *b)

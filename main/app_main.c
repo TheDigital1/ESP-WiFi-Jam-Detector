@@ -4,8 +4,8 @@
  * esp-wifi-jammer-detector: receive-only RF interference / possible-jamming
  * detector for the Waveshare ESP32-C5-Touch-LCD-3.5.
  *
- * M3: full band plan sweep with averaging, DC notch, stitching and a live
- * spectrum chart.
+ * M4: full band plan sweep, live spectrum, and per-band interference
+ * detection against a learned baseline.
  */
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 #include "board.h"
 #include "characterize.h"
+#include "detector.h"
 #include "espsdr_rx.h"
 #include "lvgl_port.h"
 #include "sweep.h"
@@ -69,6 +70,9 @@ static esp_err_t start(void)
         .yield_pct = 10, /* for detect + IDLE; the UI task outranks the sweep */
     };
     ESP_RETURN_ON_ERROR(sweep_start(&cfg), TAG, "sweep");
+    detect_config_t dcfg;
+    detect_default_config(&dcfg);
+    ESP_RETURN_ON_ERROR(detector_start(&dcfg), TAG, "detector");
     ESP_RETURN_ON_ERROR(lvp_init(), TAG, "lvgl");
     ESP_RETURN_ON_ERROR(ui_init(), TAG, "ui");
     ESP_RETURN_ON_ERROR(board_backlight_set(80), TAG, "backlight");

@@ -25,7 +25,7 @@ typedef struct {
     unsigned yield_pct;           /* CPU share left to other tasks (UI, detect, idle), 0..90 */
 } sweep_config_t;
 
-/* One tune's result, passed to the segment callback (M4: detector). */
+/* One tune's result, passed to the segment callback (the detector). */
 typedef struct {
     band_id_t band;
     unsigned slice;
@@ -33,6 +33,7 @@ typedef struct {
     unsigned first_bin, bins; /* position in the band grid */
     const int16_t *avg_cdb;   /* bins entries, 0.01 dB */
     const int16_t *max_cdb;   /* per-snapshot max over the K snapshots */
+    const int16_t *min_cdb;   /* per-snapshot min (grid bin) over the K snapshots */
     unsigned gain;
     unsigned snapshots, clipped_snapshots;
     int64_t t_us;

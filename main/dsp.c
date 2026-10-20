@@ -199,3 +199,19 @@ void dsp_reduce(const uint32_t *avg, const uint32_t *max, unsigned fft_first, un
         max_cdb[k] = dsp_cdb(peak);
     }
 }
+
+void dsp_reduce_min(const uint32_t *power, unsigned fft_first, unsigned decim, unsigned count, uint32_t *min,
+                    int first)
+{
+    for (unsigned k = 0; k < count; k++) {
+        const uint32_t *p = power + fft_first + k * decim;
+        uint64_t sum = 0;
+        for (unsigned d = 0; d < decim; d++) {
+            sum += p[d];
+        }
+        const uint32_t v = (uint32_t)(sum / decim);
+        if (first || v < min[k]) {
+            min[k] = v;
+        }
+    }
+}

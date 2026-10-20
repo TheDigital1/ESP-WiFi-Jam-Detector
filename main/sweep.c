@@ -76,7 +76,8 @@ static dsp_fft_t s_fft;
 static int16_t *s_iq;
 static uint32_t *s_power, *s_avg, *s_max;
 static uint64_t *s_sum;
-static int16_t *s_seg_avg, *s_seg_max;
+static uint32_t *s_gmin; /* grid-bin min over the snapshots, one slice */
+static int16_t *s_seg_avg, *s_seg_max, *s_seg_min;
 
 static void *psram_alloc(size_t bytes)
 {
@@ -153,6 +154,7 @@ static esp_err_t sweep_slice(band_state_t *b, unsigned s, bool last)
     s_prof.tune_us += esp_timer_get_time() - t0;
     budget_yield(t0);
 
+    const unsigned first = p->slice_first_bin[s], bins = p->slice_bins[s];
     memset(s_sum, 0, FFT_N * sizeof(uint64_t));
     memset(s_max, 0, FFT_N * sizeof(uint32_t));
     unsigned clipped_snaps = 0;
@@ -163,6 +165,9 @@ static esp_err_t sweep_slice(band_state_t *b, unsigned s, bool last)
         s_prof.capture_us += esp_timer_get_time() - c0;
         clipped_snaps += info.clipped > 0;
         dsp_power_spectrum(&s_fft, s_iq, s_power);
+        /* Notch each snapshot, so the per-snapshot min and max never see the DC spike. */
+        dsp_dc_notch(s_power, FFT_N, DC_GUARD);
+        dsp_reduce_min(s_power, p->slice_fft_first[s], p->decim, bins, s_gmin, k == 0);
         for (unsigned j = 0; j < FFT_N; j++) {
             s_sum[j] += s_power[j];
             if (s_power[j] > s_max[j]) {
@@ -176,10 +181,8 @@ static esp_err_t sweep_slice(band_state_t *b, unsigned s, bool last)
     for (unsigned j = 0; j < FFT_N; j++) {
         s_avg[j] = (uint32_t)(s_sum[j] / s_cfg.snapshots);
     }
-    dsp_dc_notch(s_avg, FFT_N, DC_GUARD);
-    dsp_dc_notch(s_max, FFT_N, DC_GUARD);
-    const unsigned first = p->slice_first_bin[s], bins = p->slice_bins[s];
     dsp_reduce(s_avg, s_max, p->slice_fft_first[s], p->decim, bins, s_seg_avg, s_seg_max);
+    dsp_to_cdb(s_gmin, s_seg_min, 0, bins);
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     memcpy(b->avg_cdb + first, s_seg_avg, bins * sizeof(int16_t));
@@ -204,6 +207,7 @@ static esp_err_t sweep_slice(band_state_t *b, unsigned s, bool last)
             .bins = bins,
             .avg_cdb = s_seg_avg,
             .max_cdb = s_seg_max,
+            .min_cdb = s_seg_min,
             .gain = b->gain,
             .snapshots = s_cfg.snapshots,
             .clipped_snapshots = clipped_snaps,
@@ -321,8 +325,10 @@ esp_err_t sweep_start(const sweep_config_t *cfg)
     s_sum = psram_alloc(FFT_N * sizeof(uint64_t));
     s_seg_avg = psram_alloc(BP_MAX_BINS * sizeof(int16_t));
     s_seg_max = psram_alloc(BP_MAX_BINS * sizeof(int16_t));
+    s_seg_min = psram_alloc(BP_MAX_BINS * sizeof(int16_t));
+    s_gmin = psram_alloc(BP_MAX_BINS * sizeof(uint32_t));
     ESP_RETURN_ON_FALSE(window && twiddle && work && order && s_iq && s_power && s_avg && s_max && s_sum &&
-                            s_seg_avg && s_seg_max,
+                            s_seg_avg && s_seg_max && s_seg_min && s_gmin,
                         ESP_ERR_NO_MEM, TAG, "DSP buffers");
     ESP_RETURN_ON_FALSE(dsp_fft_init(&s_fft, FFT_N, window, twiddle, work, order) == 0, ESP_ERR_INVALID_ARG, TAG,
                         "fft init");

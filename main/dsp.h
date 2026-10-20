@@ -50,3 +50,9 @@ void dsp_dc_notch(uint32_t *power, unsigned n, unsigned guard);
  * avg_cdb gets the mean of avg power, max_cdb the max of max power. */
 void dsp_reduce(const uint32_t *avg, const uint32_t *max, unsigned fft_first, unsigned decim, unsigned count,
                 int16_t *avg_cdb, int16_t *max_cdb);
+
+/* Running grid-bin minimum over snapshots: for count grid bins starting at
+ * FFT bin fft_first, the mean power of decim FFT bins. min[k] takes that
+ * value on the first snapshot (first != 0), else the smaller of the two. */
+void dsp_reduce_min(const uint32_t *power, unsigned fft_first, unsigned decim, unsigned count, uint32_t *min,
+                    int first);

@@ -9,8 +9,8 @@ It never transmits, injects or deauthenticates anything. It can show that the
 RF environment changed; it cannot prove intent. A microwave oven will look
 like interference on 2.4 GHz.
 
-Status: milestones M0–M3 done (board bring-up, receiver, full sweep and live
-spectrum). Detection (M4) and the full UI (M5) are next.
+Status: milestones M0–M4 done (board bring-up, receiver, full sweep, live
+spectrum, detection). The full UI with status/settings screens (M5) is next.
 
 ## Build and flash
 
@@ -40,14 +40,21 @@ idf.py -p /dev/ttyACM0 flash monitor
 On Linux, ModemManager may grab the board's USB port and reset it. Stop it, or
 add a udev rule with `ENV{ID_MM_DEVICE_IGNORE}="1"` for USB vendor `303a`.
 
-Host unit tests (no board needed): `make -C test_host`.
+Host unit tests (no board needed): `make -C test_host`. This also generates
+the synthetic spectra for the detector tests with `tools/sim_spectra.py`
+(Python 3, standard library only).
 
 ## Using it
 
-- The spectrum screen shows the current average (cyan, filled) and max-hold
-  (orange) in relative dB. The header shows sweeps per second for each band.
-- **BOOT** switches between 2.4 GHz and 5 GHz. **Reset max** clears max-hold.
-- At power-up the receiver auto-ranges its gain for a few seconds (see below).
+- The spectrum screen shows the current average (cyan, filled), max-hold
+  (orange) and the learned baseline (grey) in relative dB. The header shows the
+  shown band's detector state in colour (grey learning, green normal, amber
+  suspect, red interference); the other band's state is at the top right.
+- **BOOT** short press switches between 2.4 GHz and 5 GHz; **long press
+  (1.5 s)** re-learns both baselines. **Reset max** clears max-hold.
+- At power-up the receiver auto-ranges its gain (~8 s), then learns the
+  baseline for 60 s. Keep the RF environment normal during learning: anything
+  present then becomes "normal".
 
 ## How it works
 
@@ -109,10 +116,62 @@ waits at most for the strip already in flight.
 |---|---|---|
 | LVGL / UI | 11 | short bursts, mostly waiting on LCD DMA; the plot is drawn straight to the panel in strips, not through LVGL |
 | sweep | 10 (12 during each ~2 ms capture) | CPU-bound; yields 10 % for detect and idle |
+| detect | 9 | one band spectrum per completed sweep; a sweep is dropped (counted) rather than block the sweep |
 
 The brief asked for the sweep to have the highest priority. Below the sweep,
 the UI only managed about 1 frame/s, because the 25 ms 5 GHz retunes starved
 it. With the UI on top it still takes only the CPU it really uses (about 25 %).
+
+### Detection (M4)
+
+The receiver is uncalibrated, so detection looks for **change against a
+learned baseline**, per band (`main/detect.c`, no ESP-IDF headers, host-tested).
+
+Per sweep the detector gets, for every 312.5 kHz bin, the **mean**, **min** and
+**max** power over the tune's K snapshots. The min matters: energy present in
+every snapshot (a jammer, a CW tone) raises it, bursty Wi-Fi mostly does not.
+
+- **Baseline:** for 60 s, the median per bin of the mean spectrum, and per
+  10 MHz cell the median of the 20th-percentile floor (mean and min spectra).
+  Afterwards it follows slow changes (clipped EMA, ~1 dB per 30 sweeps at
+  most) only while the band is NORMAL with no evidence. A gain change
+  re-learns.
+- **Metrics** (logged every 10 s and on every state change): floor rise per
+  cell (median and max), continuous (min-spectrum) floor rise, share of cells
+  raised, occupancy (bins ≥ 6 dB over the cell's baseline floor), per-cell
+  duty over the window, spectral flatness of the most raised cell, clipping,
+  narrowband cluster, swept-peak tracker.
+- **Evidence:**
+
+| Kind | Condition (defaults) | Can alarm |
+|---|---|---|
+| wideband | min-spectrum floor ≥ 10 dB up in ≥ 60 % of cells | yes |
+| narrowband | ≤ 16 bins (5 MHz) whose min power is ≥ 15 dB over baseline in ≥ 90 % of the last 5 s of sweeps, with quiet shoulders | yes |
+| swept | a narrow peak ≥ 15 dB moving steadily one way (sawtooth wraps allowed) for ≥ 4 sweeps, covering ≥ 60 % of the band | yes |
+| pulsed wideband | mean-spectrum floor ≥ 10 dB up in ≥ 60 % of cells, or ≥ 50 % of snapshots clipped | SUSPECT only |
+
+- **State per band:** NORMAL → SUSPECT (evidence in 2 consecutive sweeps) →
+  ALARM (SUSPECT ≥ 5 s and alarm-capable evidence in ≥ 80 % of the last 5 s of
+  sweeps) → NORMAL (no alarm-capable evidence for 10 s). SUSPECT returns to
+  NORMAL after 5 s without evidence. Every transition is logged with metrics.
+- All thresholds are in `detect_config_t` (`detect_default_config()`); M5 will
+  make them editable and persist them.
+
+Host tests (`test_host/test_detect.c`) replay 160 s of synthetic sweeps per
+scenario from `tools/sim_spectra.py` (60 s learning, event from 70 s to 130 s)
+with the real sweep timing and the default thresholds:
+
+| Scenario | 2.4 GHz | 5 GHz |
+|---|---|---|
+| clean (AP, beacons, BLE, fixed spurs) | normal | normal |
+| busy Wi-Fi (iperf-like 80–90 % airtime on several channels) | suspect (pulsed), no alarm | normal |
+| wideband floor +15 dB / +12 dB | ALARM wideband after ~7 s | ALARM wideband after ~8 s |
+| CW tone +25 dB / +20 dB | ALARM narrowband after ~11 s | ALARM narrowband after ~12 s |
+| swept tone (20 s / 40 s sawtooth) | ALARM swept after ~19 s | ALARM swept after ~32 s |
+| microwave oven (50 Hz gated, drifting carrier) | suspect (pulsed) | normal |
+| slow 4 dB floor drift | normal | normal |
+
+All of them also pass with other random seeds (`sim_spectra.py --seed`).
 
 ## Known limits
 
@@ -123,6 +182,19 @@ it. With the UI on top it still takes only the CPU it really uses (about 25 %).
   dB), so detection compares against a learned baseline, not absolute dBm.
 - **5 GHz sweep time** is about 1.3 s, dominated by per-frequency DC
   recalibration in the receiver.
+- **Bursty vs continuous:** a jammer that is only on part of the time, busy
+  Wi-Fi and a mains-gated microwave oven all look alike at this time
+  resolution; they reach SUSPECT ("pulsed wideband"), not ALARM. Busy 2.4 GHz
+  Wi-Fi can therefore show amber. Inverter microwave ovens run nearly
+  continuously and may alarm.
+- **Single-channel interference** that is continuous and as wide as a Wi-Fi
+  channel (20–160 MHz) is indistinguishable from a saturated Wi-Fi link and is
+  not flagged; narrowband needs ≤ 5 MHz and wideband ≥ 60 % of the band.
+- **Swept detection** needs the sweep to be slow compared with our own
+  sweep (seconds per pass); a fast sweep looks like wideband or pulsed
+  energy instead.
+- **Baseline at boot:** the baseline is re-learned at every boot for now, so
+  interference present then is learned as normal (M5 will persist it).
 - **No Wi-Fi networking:** while sweeping, the radio is retuned constantly, so
   normal Wi-Fi (scan/connect/AP) is not available.
 - Normal Wi-Fi start-up runs the PHY's own calibration once at boot, as on every
@@ -136,12 +208,15 @@ components/board/      Waveshare board support (pins cited in include/board_pins
 components/espsdr_rx/  ESP32-C5 receiver vendored from esp-sdr (see VENDORED.md)
 main/bandplan.c        tune centres and frequency grid (host-tested)
 main/dsp.c             window, FFT, dB, percentiles, DC notch (host-tested)
+main/detect.c          baseline, metrics, heuristics, state machine (host-tested)
+main/detector.c        detector task: assembles band spectra, logs transitions
 main/plot.c            spectrum renderer (host-tested)
 main/sweep.c           sweep task, auto-range, stitched spectra
 main/lvgl_port.c       LVGL display/touch glue, PSRAM allocator
 main/ui.c              screens
 main/characterize.c    optional receiver/LCD measurements (CONFIG_JD_CHARACTERIZE)
 test_host/             host unit tests
+tools/sim_spectra.py   synthetic spectra for the detector tests
 ```
 
 ## Licence
