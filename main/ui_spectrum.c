@@ -12,6 +12,12 @@
  * Waterfall view: one row per completed sweep, newest at the top, coloured by
  * dB above the learned baseline (absolute level while learning). History is
  * kept for both bands all the time, so it is there when the view opens.
+ *
+ * Alarm snapshots: when a band enters ALARM and a TF card is in, the
+ * waterfall of that band is saved once the alarm row has scrolled to the
+ * middle of the plot (half the history before the alarm, half after). The
+ * image is rendered off screen like the spectrum screen, with a red mark on
+ * the alarm row, and written as a BMP by eventlog.c.
  */
 #include <stdio.h>
 #include <string.h>
@@ -25,7 +31,9 @@
 #include "lvgl.h"
 #include "board.h"
 #include "detector.h"
+#include "eventlog.h"
 #include "plot.h"
+#include "settings.h"
 #include "sweep.h"
 #include "ui_priv.h"
 
@@ -45,6 +53,8 @@ static const char *TAG = "ui_spectrum";
 #define WF_ABS_HI     6000
 #define WF_LABELS     3
 #define AXIS_GAP      3  /* px between axis labels in a row */
+#define AXIS_Y        (PLOT_Y + PLOT_H + 2)
+#define AXIS_LABELS   16
 
 /* Waterfall history, newest row at head; big-endian RGB565, PSRAM (2 x 212 KB). */
 typedef struct {
@@ -52,6 +62,12 @@ typedef struct {
     uint32_t t_ms[PLOT_H];
     unsigned head, count;
     uint32_t sweeps;         /* sweep count of the newest row */
+    uint32_t rows;           /* rows added since boot */
+    detect_state_t last_state;
+    bool snap_pending;       /* alarm snapshot waiting for its row to reach mid-plot */
+    uint32_t snap_rows;      /* rows at the alarm */
+    uint32_t snap_alarm_ms;
+    detect_kind_t snap_kind;
 } waterfall_t;
 
 /* The plot area is not an LVGL object: LVGL only paints it once (screen
@@ -71,13 +87,9 @@ static band_id_t s_band = BAND_24;
 static bool s_painted; /* LVGL has painted the static parts since the screen was loaded */
 static sweep_view_t s_view;
 static int16_t *s_base; /* detector baseline, n_bins */
-typedef struct {
-    lv_obj_t *obj;
-    int16_t left, right;
-    uint8_t row;
-} axis_label_t;
-static axis_label_t s_axis_labels[16];
+static lv_obj_t *s_axis_labels[16];
 static unsigned s_n_axis_labels;
+static lv_obj_t *s_snap_parent; /* off-screen parent of the snapshot canvas */
 static waterfall_t s_wf[BAND_COUNT];
 static uint16_t s_lut[WF_LUT];
 static bool s_waterfall, s_wf_dirty;
@@ -188,6 +200,8 @@ static uint16_t wf_colour(int32_t v, int32_t lo, int32_t hi)
     return s_lut[i < 0 ? 0 : (i >= WF_LUT ? WF_LUT - 1 : i)];
 }
 
+static void save_snapshot(band_id_t band);
+
 /* One row per new sweep, for both bands. Each column shows the strongest
  * bin it covers, so narrow signals stay visible on the 5 GHz band. */
 void ui_spectrum_feed(const ui_snap_t *snap)
@@ -195,6 +209,16 @@ void ui_spectrum_feed(const ui_snap_t *snap)
     s_now_ms = snap->now_ms;
     for (int b = 0; b < BAND_COUNT; b++) {
         waterfall_t *w = &s_wf[b];
+        const detect_status_t *st = &snap->st[b];
+        if (snap->sweep == SWEEP_RUNNING && st->state == DETECT_ALARM && w->last_state != DETECT_ALARM &&
+            !w->snap_pending && eventlog_card_ready()) {
+            /* One snapshot per alarm; a new alarm before it is saved is in it. */
+            w->snap_pending = true;
+            w->snap_rows = w->rows;
+            w->snap_alarm_ms = st->state_since_ms;
+            w->snap_kind = st->kind;
+        }
+        w->last_state = st->state;
         sweep_view_t meta = {0};
         if (snap->sweep != SWEEP_RUNNING || sweep_get_view((band_id_t)b, &meta) != ESP_OK || !meta.valid ||
             meta.sweeps == w->sweeps) {
@@ -220,6 +244,11 @@ void ui_spectrum_feed(const ui_snap_t *snap)
         }
         if (b == (int)s_band) {
             s_wf_dirty = true;
+        }
+        w->rows++;
+        if (w->snap_pending && w->rows - w->snap_rows >= PLOT_H / 2) {
+            w->snap_pending = false;
+            save_snapshot((band_id_t)b);
         }
     }
 }
@@ -270,62 +299,210 @@ static int32_t khz_to_col(const band_plan_t *p, uint32_t khz)
 
 /* Two label rows under the plot. A label that would overlap one already
  * placed tries the other row and is otherwise left out, so the order of the
- * calls in build_axis() is their priority. */
-static void add_axis_label(const char *text, int32_t x, int32_t row)
+ * calls in place_axis() is their priority. The same placement serves the
+ * screen (LVGL labels) and the snapshot (drawn into a canvas). */
+typedef void (*axis_put_fn_t)(void *ctx, const char *text, int32_t left, int32_t row);
+
+typedef struct {
+    axis_put_fn_t put;
+    void *ctx;
+    int32_t width; /* of the screen or image */
+    struct {
+        int16_t left, right;
+        uint8_t row;
+    } placed[AXIS_LABELS];
+    unsigned n;
+} axis_placer_t;
+
+static void axis_label(axis_placer_t *a, const char *text, int32_t x, int32_t row)
 {
-    if (s_n_axis_labels >= sizeof(s_axis_labels) / sizeof(s_axis_labels[0])) {
+    if (a->n >= AXIS_LABELS) {
         return;
     }
-    lv_obj_t *l = lv_label_create(s_axis);
-    lv_label_set_text(l, text);
-    lv_obj_update_layout(l);
-    const int32_t w = lv_obj_get_width(l);
+    lv_point_t sz;
+    lv_text_get_size(&sz, text, &lv_font_montserrat_14, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int32_t w = sz.x;
     int32_t left = x - w / 2;
-    left = left < 0 ? 0 : (left + w > BOARD_LCD_W ? BOARD_LCD_W - w : left);
+    left = left < 0 ? 0 : (left + w > a->width ? a->width - w : left);
     for (int32_t r = 0; r < 2; r++, row ^= 1) {
         bool clear = true;
-        for (unsigned i = 0; i < s_n_axis_labels && clear; i++) {
-            const axis_label_t *o = &s_axis_labels[i];
-            clear = o->row != row || left + w + AXIS_GAP <= o->left || o->right + AXIS_GAP <= left;
+        for (unsigned i = 0; i < a->n && clear; i++) {
+            clear = a->placed[i].row != row || left + w + AXIS_GAP <= a->placed[i].left ||
+                    a->placed[i].right + AXIS_GAP <= left;
         }
         if (clear) {
-            lv_obj_set_pos(l, left, row * 16);
-            s_axis_labels[s_n_axis_labels++] = (axis_label_t){l, (int16_t)left, (int16_t)(left + w), (uint8_t)row};
+            a->placed[a->n].left = (int16_t)left;
+            a->placed[a->n].right = (int16_t)(left + w);
+            a->placed[a->n].row = (uint8_t)row;
+            a->n++;
+            a->put(a->ctx, text, left, row);
             return;
         }
     }
-    lv_obj_delete(l);
+}
+
+static void place_axis(const band_plan_t *p, int32_t plot_x, int32_t width, axis_put_fn_t put, void *ctx)
+{
+    axis_placer_t a = {.put = put, .ctx = ctx, .width = width};
+    char buf[24];
+    for (unsigned i = 0; i < p->n_ticks; i++) {
+        snprintf(buf, sizeof(buf), "ch%s", p->ticks[i].name);
+        axis_label(&a, buf, plot_x + khz_to_col(p, p->ticks[i].khz), 0);
+    }
+    for (unsigned i = 0; i < p->n_labels; i++) {
+        axis_label(&a, p->labels[i].name, plot_x + khz_to_col(p, (p->labels[i].lo_khz + p->labels[i].hi_khz) / 2), 1);
+    }
+    /* Band edges last: on 5 GHz they would sit on ch36/ch165 and U-NII-1/3,
+     * so they are dropped there and the channel numbers carry the scale. */
+    snprintf(buf, sizeof(buf), "%u", (unsigned)(p->start_khz / 1000));
+    axis_label(&a, buf, plot_x, 0);
+    snprintf(buf, sizeof(buf), "%u", (unsigned)((p->stop_khz + 500) / 1000));
+    axis_label(&a, buf, plot_x + PLOT_W, 0);
+    if (!p->n_labels) {
+        axis_label(&a, "MHz", plot_x + PLOT_W / 2, 1);
+    }
+}
+
+static void screen_axis_put(void *ctx, const char *text, int32_t left, int32_t row)
+{
+    LV_UNUSED(ctx);
+    if (s_n_axis_labels < AXIS_LABELS) {
+        lv_obj_t *l = lv_label_create(s_axis);
+        lv_label_set_text(l, text);
+        lv_obj_set_pos(l, left, row * 16);
+        s_axis_labels[s_n_axis_labels++] = l;
+    }
 }
 
 static void build_axis(void)
 {
     const band_plan_t *p = sweep_plan(s_band);
     for (unsigned i = 0; i < s_n_axis_labels; i++) {
-        lv_obj_delete(s_axis_labels[i].obj);
+        lv_obj_delete(s_axis_labels[i]);
     }
     s_n_axis_labels = 0;
     s_n_grid_x = 0;
-    char buf[24];
-    for (unsigned i = 0; i < p->n_ticks; i++) {
-        int32_t col = khz_to_col(p, p->ticks[i].khz);
-        snprintf(buf, sizeof(buf), "ch%s", p->ticks[i].name);
-        add_axis_label(buf, PLOT_X + col, 0);
-        if (s_n_grid_x < sizeof(s_grid_x) / sizeof(s_grid_x[0])) {
-            s_grid_x[s_n_grid_x++] = (uint16_t)col; /* ticks are listed in frequency order */
+    for (unsigned i = 0; i < p->n_ticks && s_n_grid_x < sizeof(s_grid_x) / sizeof(s_grid_x[0]); i++) {
+        s_grid_x[s_n_grid_x++] = (uint16_t)khz_to_col(p, p->ticks[i].khz); /* ticks are in frequency order */
+    }
+    place_axis(p, PLOT_X, BOARD_LCD_W, screen_axis_put, NULL);
+}
+
+/* ---- alarm snapshot ---------------------------------------------------- */
+
+/* Like the screen, with a wider margin for the time labels. */
+#define SNAP_X 44
+#define SNAP_W (SNAP_X + PLOT_W + 4)
+#define SNAP_H 320
+
+static void snap_text(lv_layer_t *layer, const char *text, const lv_font_t *font, lv_color_t c, int32_t x,
+                      int32_t y, int32_t w, lv_text_align_t align)
+{
+    lv_draw_label_dsc_t d;
+    lv_draw_label_dsc_init(&d);
+    d.text = text;
+    d.text_local = 1; /* drawn at lv_canvas_finish_layer(): keep a copy */
+    d.font = font;
+    d.color = c;
+    d.align = align;
+    const lv_area_t a = {x, y, x + w - 1, y + lv_font_get_line_height(font) - 1};
+    lv_draw_label(layer, &d, &a);
+}
+
+static void snap_axis_put(void *ctx, const char *text, int32_t left, int32_t row)
+{
+    snap_text(ctx, text, &lv_font_montserrat_14, lv_color_white(), left, AXIS_Y + row * 16, 120, LV_TEXT_ALIGN_LEFT);
+}
+
+static void fmt_rel(char *buf, size_t len, int32_t ms)
+{
+    const int32_t s = (ms < 0 ? ms - 500 : ms + 500) / 1000, a = s < 0 ? -s : s;
+    if (a < 100) {
+        snprintf(buf, len, "%+lds", (long)s);
+    } else {
+        snprintf(buf, len, "%c%ld:%02ld", s < 0 ? '-' : '+', (long)(a / 60), (long)(a % 60));
+    }
+}
+
+static void save_snapshot(band_id_t band)
+{
+    const waterfall_t *w = &s_wf[band];
+    const band_plan_t *p = sweep_plan(band);
+    const unsigned alarm_age = w->rows - w->snap_rows; /* row of the alarm sweep, from the top */
+    uint16_t *px = heap_caps_aligned_alloc(4, SNAP_W * SNAP_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!px) {
+        ESP_LOGW(TAG, "snapshot: no memory");
+        return;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    lv_obj_t *cv = lv_canvas_create(s_snap_parent);
+    lv_canvas_set_buffer(cv, px, SNAP_W, SNAP_H, LV_COLOR_FORMAT_RGB565);
+    lv_canvas_fill_bg(cv, lv_color_black(), LV_OPA_COVER);
+
+    /* Waterfall rows: the ring is big-endian for the panel, the canvas native. */
+    for (unsigned y = 0; y < PLOT_H; y++) {
+        uint16_t *dst = px + (size_t)(PLOT_Y + y) * SNAP_W + SNAP_X;
+        const uint16_t *src = w->px + (size_t)((w->head + y) % PLOT_H) * PLOT_W;
+        for (unsigned x = 0; x < PLOT_W; x++) {
+            dst[x] = __builtin_bswap16(y < w->count ? src[x] : s_style.bg);
         }
     }
-    for (unsigned i = 0; i < p->n_labels; i++) {
-        add_axis_label(p->labels[i].name, PLOT_X + khz_to_col(p, (p->labels[i].lo_khz + p->labels[i].hi_khz) / 2),
-                       1);
+    /* Alarm row: red bars in both margins. */
+    const uint16_t red = lv_color_to_u16(ui_state_colour(DETECT_ALARM));
+    for (int dy = -1; dy <= 1; dy++) {
+        uint16_t *row = px + (size_t)(PLOT_Y + alarm_age + dy) * SNAP_W;
+        for (unsigned x = 0; x < SNAP_X - 2; x++) {
+            row[x] = red;
+        }
+        for (unsigned x = SNAP_X + PLOT_W + 1; x < SNAP_W; x++) {
+            row[x] = red;
+        }
     }
-    /* Band edges last: on 5 GHz they would sit on ch36/ch165 and U-NII-1/3,
-     * so they are dropped there and the channel numbers carry the scale. */
-    snprintf(buf, sizeof(buf), "%u", (unsigned)(p->start_khz / 1000));
-    add_axis_label(buf, PLOT_X, 0);
-    snprintf(buf, sizeof(buf), "%u", (unsigned)((p->stop_khz + 500) / 1000));
-    add_axis_label(buf, PLOT_X + PLOT_W, 0);
-    if (!p->n_labels) {
-        add_axis_label("MHz", BOARD_LCD_W / 2, 1);
+    /* Colour scale under the axis. */
+    const int32_t bar_x = 30, bar_w = 160, bar_y = 304;
+    for (int32_t y = bar_y; y < bar_y + 10; y++) {
+        for (int32_t x = 0; x < bar_w; x++) {
+            px[(size_t)y * SNAP_W + bar_x + x] = __builtin_bswap16(s_lut[x * (WF_LUT - 1) / (bar_w - 1)]);
+        }
+    }
+
+    lv_layer_t layer;
+    lv_canvas_init_layer(cv, &layer);
+    char text[96], t[16];
+    snprintf(text, sizeof(text), "%s  INTERFERENCE: %s", p->name, detect_kind_name(w->snap_kind));
+    snap_text(&layer, text, &lv_font_montserrat_20, ui_state_colour(DETECT_ALARM), 4, 2, 340, LV_TEXT_ALIGN_LEFT);
+    ui_fmt_duration(t, sizeof(t), w->snap_alarm_ms);
+    snprintf(text, sizeof(text), "boot %u, up %s", (unsigned)settings_boot(), t);
+    snap_text(&layer, text, &lv_font_montserrat_14, lv_color_white(), 340, 6, SNAP_W - 344, LV_TEXT_ALIGN_RIGHT);
+    /* Times against the alarm: top row, alarm row, oldest row. */
+    const uint32_t t_alarm = w->t_ms[(w->head + alarm_age) % PLOT_H];
+    const lv_color_t grey = lv_color_hex(0x9ab0c8);
+    fmt_rel(t, sizeof(t), (int32_t)(w->t_ms[w->head] - t_alarm));
+    snap_text(&layer, t, &lv_font_montserrat_12, grey, 2, PLOT_Y, SNAP_X - 4, LV_TEXT_ALIGN_LEFT);
+    snap_text(&layer, "alarm", &lv_font_montserrat_12, ui_state_colour(DETECT_ALARM), 2,
+              PLOT_Y + (int32_t)alarm_age - 16, SNAP_X - 4, LV_TEXT_ALIGN_LEFT);
+    if (w->count == PLOT_H) {
+        fmt_rel(t, sizeof(t), (int32_t)(w->t_ms[(w->head + PLOT_H - 1) % PLOT_H] - t_alarm));
+        snap_text(&layer, t, &lv_font_montserrat_12, grey, 2, PLOT_Y + PLOT_H - 14, SNAP_X - 4, LV_TEXT_ALIGN_LEFT);
+    }
+    place_axis(p, SNAP_X, SNAP_W, snap_axis_put, &layer);
+    snap_text(&layer, "-5", &lv_font_montserrat_14, grey, 4, bar_y - 3, bar_x - 8, LV_TEXT_ALIGN_RIGHT);
+    snap_text(&layer, "+30 dB above baseline", &lv_font_montserrat_14, grey, bar_x + bar_w + 6, bar_y - 3, 170,
+              LV_TEXT_ALIGN_LEFT);
+    lv_canvas_finish_layer(cv, &layer);
+    lv_obj_delete(cv);
+    const int64_t t1 = esp_timer_get_time();
+
+    eventlog_image_t img = {.px = px, .w = SNAP_W, .h = SNAP_H, .stride = SNAP_W};
+    snprintf(img.name, sizeof(img.name), "boot%u_up%us_%s_%s.bmp", (unsigned)settings_boot(),
+             (unsigned)(w->snap_alarm_ms / 1000), band == BAND_24 ? "2.4GHz" : "5GHz", detect_kind_name(w->snap_kind));
+    for (char *c = img.name; *c; c++) {
+        *c = *c == ' ' ? '-' : *c;
+    }
+    ESP_LOGI(TAG, "snapshot %s rendered in %lld ms", img.name, (t1 - t0) / 1000);
+    if (!eventlog_post_image(&img)) {
+        ESP_LOGW(TAG, "snapshot %s: writer queue full", img.name);
+        heap_caps_free(px);
     }
 }
 
@@ -507,6 +684,7 @@ lv_obj_t *ui_spectrum_create(void)
         return NULL;
     }
     build_lut();
+    s_snap_parent = lv_obj_create(NULL);
 
     s_scr = ui_screen_create();
     s_header = lv_label_create(s_scr);
@@ -536,7 +714,7 @@ lv_obj_t *ui_spectrum_create(void)
 
     s_axis = lv_obj_create(s_scr);
     lv_obj_remove_style_all(s_axis);
-    lv_obj_set_pos(s_axis, 0, PLOT_Y + PLOT_H + 2);
+    lv_obj_set_pos(s_axis, 0, AXIS_Y);
     lv_obj_set_size(s_axis, BOARD_LCD_W, 34);
 
     s_footer = lv_label_create(s_scr);

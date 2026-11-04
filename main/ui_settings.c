@@ -398,8 +398,8 @@ void ui_settings_update(const ui_snap_t *s)
         eventlog_status_t ev;
         eventlog_get_status(&ev);
         if (ev.mounted) {
-            snprintf(sd, sizeof(sd), "%u events logged%s, %u MB free", (unsigned)ev.written,
-                     ev.errors ? " (errors)" : "", (unsigned)(ev.free_kb / 1024));
+            snprintf(sd, sizeof(sd), "%u events, %u images%s, %u MB free", (unsigned)ev.written,
+                     (unsigned)ev.images, ev.errors ? " (errors)" : "", (unsigned)(ev.free_kb / 1024));
         } else {
             snprintf(sd, sizeof(sd), "no card");
         }

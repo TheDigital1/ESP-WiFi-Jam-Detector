@@ -83,6 +83,14 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
   pin 2 ON, per Waveshare's BSP), every state change is appended to
   `/jd_events.csv` on the card: boot number, uptime, band, from/to state,
   kind and all detector metrics. The card is optional.
+- **Alarm snapshots:** with a card in, each time a band enters ALARM its
+  waterfall is saved once the alarm row has scrolled to the middle of the
+  plot (about 2 minutes later at the default sweep rate), so the image shows
+  as much before the alarm as after it. Files go to `/waterfall/` on the card
+  as `boot<N>_up<S>s_<band>_<kind>.bmp`, matching the `boot` and `uptime_s`
+  columns of the CSV. The image has the band, kind, uptime, frequency axis,
+  colour scale and a red mark on the alarm row, with times relative to it.
+  One image per alarm; a second alarm before the image is saved is in it.
 - **Battery:** the status screen header shows `USB`, `battery NN%` or
   `charging NN%` from the AXP2101 fuel gauge, read every 5 s.
 - **First boot:** the receiver auto-ranges its gain (~8 s) and stores it, then
@@ -242,7 +250,10 @@ All of them also pass with other random seeds (`sim_spectra.py --seed`).
   network time while the radio scans. The event log's `boot` column (a counter
   in NVS) tells boots apart.
 - **TF-card writes** share SPI2 with the LCD and run inside the radio-quiet
-  window, so the sweep pauses for the write (typically tens of ms).
+  window, so the sweep pauses for the write (typically tens of ms). A
+  ~300 KB alarm snapshot is written 32 rows at a time with 300 ms gaps, so
+  the sweep keeps running between the pieces. Saving stops with under 2 MB
+  free on the card.
 - **Battery percentage** is the AXP2101's own fuel gauge, uncalibrated for
   the attached cell; untested here without a battery fitted.
 - **No Wi-Fi networking:** while sweeping, the radio is retuned constantly, so
@@ -265,7 +276,7 @@ main/sweep.c           sweep task, auto-range, stitched spectra
 main/lvgl_port.c       LVGL display/touch glue, PSRAM allocator
 main/settings.c        settings, gains and baselines in NVS (jd_nvs partition)
 main/audio.c           alarm beep via ES8311 + NS4150B (esp_codec_dev)
-main/eventlog.c        TF-card CSV log of detector state changes
+main/eventlog.c        TF-card CSV log of detector state changes, BMP writer
 main/ui.c              screen switching, BOOT button, alarm border
 main/ui_status.c       status screen (default)
 main/ui_spectrum.c     spectrum screen and waterfall

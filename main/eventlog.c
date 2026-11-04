@@ -5,16 +5,25 @@
  * SPI2 bus, CS GPIO9, no CD/WP, not formatted on failure. Each write runs
  * inside the radio-quiet window, like an LCD transfer: card traffic on the
  * shared bus must not overlap a capture.
+ *
+ * Waterfall images are written the same way, a band of rows per window with
+ * a gap between windows, so a ~300 KB file does not stop the sweep for the
+ * whole write. Every chunk ends with fflush(): no card I/O may be left over
+ * for outside the window.
  */
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/sdspi_host.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "board.h"
@@ -32,10 +41,22 @@ static const char *TAG = "eventlog";
                             sweep and LCD wait on it, so nothing may pre-empt the write */
 #define TASK_STACK 4096
 #define QUIET_MS   500
+#define IMG_DIR    MOUNT "/waterfall"
+#define IMG_ROWS   32    /* image rows per radio-quiet window (30 KB at 480 px) */
+#define IMG_GAP_MS 300   /* between windows: lets a sweep and the LCD through */
+#define IMG_MIN_KB 2048  /* card space kept free */
+
+typedef enum { ITEM_EVENT, ITEM_IMAGE } item_kind_t;
 
 typedef struct {
-    band_id_t band;
-    detect_event_t ev;
+    item_kind_t kind;
+    union {
+        struct {
+            band_id_t band;
+            detect_event_t ev;
+        };
+        eventlog_image_t img;
+    };
 } item_t;
 
 static QueueHandle_t s_queue;
@@ -71,12 +92,109 @@ static void update_free(void)
     }
 }
 
+/* Holds the radio-quiet token; false if the window was not granted. */
+static bool quiet_begin(void)
+{
+    if (board_rf_quiet_begin(QUIET_MS) != ESP_OK) {
+        return false;
+    }
+    vTaskPrioritySet(NULL, WRITE_PRIO);
+    return true;
+}
+
+static void quiet_end(void)
+{
+    vTaskPrioritySet(NULL, TASK_PRIO);
+    board_rf_quiet_end();
+}
+
+static void put_le(uint8_t *p, uint32_t v, int n)
+{
+    for (int i = 0; i < n; i++) {
+        p[i] = (uint8_t)(v >> (8 * i));
+    }
+}
+
+/* 16-bit BMP with RGB565 bit fields: the canvas pixels go out unchanged
+ * (little-endian), bottom row first as BMP wants. */
+static bool write_image(const eventlog_image_t *img)
+{
+    char path[96];
+    snprintf(path, sizeof(path), IMG_DIR "/%s", img->name);
+    if (s_st.free_kb < IMG_MIN_KB) {
+        ESP_LOGW(TAG, "card nearly full: %s not saved", path);
+        return false;
+    }
+    /* Rows are padded to 4 bytes in the file. */
+    const uint32_t row_b = (uint32_t)img->w * 2, pad = (4 - row_b % 4) % 4, off = 14 + 40 + 12,
+                   size = off + (row_b + pad) * img->h;
+    static const uint8_t zeros[3];
+    uint8_t hdr[14 + 40 + 12] = {'B', 'M'};
+    put_le(hdr + 2, size, 4);
+    put_le(hdr + 10, off, 4);
+    put_le(hdr + 14, 40, 4);
+    put_le(hdr + 18, img->w, 4);
+    put_le(hdr + 22, img->h, 4);
+    put_le(hdr + 26, 1, 2);
+    put_le(hdr + 28, 16, 2);
+    put_le(hdr + 30, 3, 4); /* BI_BITFIELDS */
+    put_le(hdr + 34, (row_b + pad) * img->h, 4);
+    put_le(hdr + 38, 2835, 4); /* 72 dpi */
+    put_le(hdr + 42, 2835, 4);
+    put_le(hdr + 54, 0xf800, 4);
+    put_le(hdr + 58, 0x07e0, 4);
+    put_le(hdr + 62, 0x001f, 4);
+
+    const int64_t t0 = esp_timer_get_time();
+    unsigned windows = 0;
+    if (!quiet_begin()) {
+        return false;
+    }
+    mkdir(IMG_DIR, 0775); /* fails harmlessly when it exists */
+    FILE *f = fopen(path, "wb");
+    bool ok = f && fwrite(hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+    for (int y = img->h - 1; ok && y >= 0;) {
+        for (int n = 0; ok && n < IMG_ROWS && y >= 0; n++, y--) {
+            ok = fwrite(img->px + (size_t)y * img->stride, 1, row_b, f) == row_b &&
+                 fwrite(zeros, 1, pad, f) == pad;
+        }
+        ok = ok && fflush(f) == 0;
+        windows++;
+        if (ok && y >= 0) {
+            quiet_end();
+            vTaskDelay(pdMS_TO_TICKS(IMG_GAP_MS));
+            while (!quiet_begin()) {
+                /* The file is open: card I/O must wait for a window, however long. */
+            }
+        }
+    }
+    if (f && fclose(f) != 0) {
+        ok = false;
+    }
+    update_free();
+    quiet_end();
+    if (ok) {
+        s_st.images++;
+        ESP_LOGI(TAG, "saved %s (%" PRIu32 " KB, %u windows, %lld ms)", path, size / 1024, windows,
+                 (esp_timer_get_time() - t0) / 1000);
+    }
+    return ok;
+}
+
 static void writer_task(void *arg)
 {
     (void)arg;
     item_t it;
     for (;;) {
         if (xQueueReceive(s_queue, &it, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (it.kind == ITEM_IMAGE) {
+            if (!write_image(&it.img)) {
+                s_st.errors++;
+                ESP_LOGW(TAG, "waterfall image %s not saved", it.img.name);
+            }
+            heap_caps_free(it.img.px);
             continue;
         }
         if (board_rf_quiet_begin(QUIET_MS) != ESP_OK) {
@@ -95,9 +213,10 @@ static void writer_task(void *arg)
         while (ok) {
             ok = write_row(f, &it) > 0;
             s_st.written += ok;
-            if (xQueueReceive(s_queue, &it, 0) != pdTRUE) {
-                break;
+            if (xQueuePeek(s_queue, &it, 0) != pdTRUE || it.kind != ITEM_EVENT) {
+                break; /* an image waits for its own windows */
             }
+            xQueueReceive(s_queue, &it, 0);
         }
         if (f && fclose(f) != 0) {
             ok = false;
@@ -149,10 +268,24 @@ void eventlog_post(band_id_t band, const detect_event_t *ev)
     if (!s_queue) {
         return;
     }
-    const item_t it = {.band = band, .ev = *ev};
+    const item_t it = {.kind = ITEM_EVENT, .band = band, .ev = *ev};
     if (xQueueSend(s_queue, &it, 0) != pdTRUE) {
         s_st.dropped++;
     }
+}
+
+bool eventlog_post_image(const eventlog_image_t *img)
+{
+    if (!s_queue) {
+        return false;
+    }
+    item_t it = {.kind = ITEM_IMAGE, .img = *img};
+    return xQueueSend(s_queue, &it, 0) == pdTRUE;
+}
+
+bool eventlog_card_ready(void)
+{
+    return s_queue && s_st.free_kb >= IMG_MIN_KB;
 }
 
 void eventlog_get_status(eventlog_status_t *out)
