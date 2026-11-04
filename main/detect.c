@@ -547,7 +547,8 @@ bool detect_sweep(detect_t *d, const detect_input_t *in, detect_event_t *ev)
     /* Swept: track the strongest narrow, non-persistent peak. Bins are
      * captured in frequency order, so interpolate when the peak was seen. */
     const int pos = find_swept_peak(d, in->avg_cdb);
-    const uint32_t t0 = in->t_start_ms && in->t_start_ms <= t ? in->t_start_ms : t;
+    /* Unsigned difference: still right across the 49.7-day wrap of t. */
+    const uint32_t t0 = in->t_start_ms && t - in->t_start_ms < 60000u ? in->t_start_ms : t;
     swept_update(d, pos, pos < 0 ? t : t0 + (uint32_t)((uint64_t)(t - t0) * (unsigned)pos / d->n_bins));
     if (d->sw_pos >= 0) {
         m.swept_khz = bin_centre_khz(d, (unsigned)d->sw_pos);

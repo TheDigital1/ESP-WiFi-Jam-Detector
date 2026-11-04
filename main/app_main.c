@@ -8,6 +8,7 @@
  * status / spectrum + waterfall / settings screens, settings, gains and
  * baselines kept in flash, alarm beep, TF-card event log, battery level.
  */
+#include <stdio.h>
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -132,4 +133,11 @@ void app_main(void)
 #if CONFIG_JD_CPU_STATS
     xTaskCreate(cpu_stats_task, "cpu_stats", 3072, NULL, 1, NULL);
 #endif
+    /* Hourly, for leaks that only show after days of uptime. */
+    for (unsigned h = 1;; h++) {
+        vTaskDelay(pdMS_TO_TICKS(3600 * 1000));
+        char when[16];
+        snprintf(when, sizeof(when), "%u h", h);
+        log_memory(when);
+    }
 }

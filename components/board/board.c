@@ -9,6 +9,7 @@
  * 08_AXP2101/main/port_axp2101.cpp), so we only read it, apart from enabling
  * the battery voltage ADC as that example does.
  */
+#include <stdatomic.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -59,7 +60,8 @@ static SemaphoreHandle_t s_rf_token;
 /* Captures take precedence: while one waits, no new LCD transfer starts, so a
  * capture waits for at most the transfer already in flight. Without this the
  * higher-priority UI re-took the token after every strip and starved it. */
-static volatile int s_rf_waiting;
+static atomic_int s_rf_waiting; /* atomic: the sweep and the event log both count in; a lost
+                                   update once left it at -1 and stalled every LCD strip */
 static SemaphoreHandle_t s_rf_done;
 static board_lcd_done_cb_t s_async_cb;
 static void *s_async_ctx;
@@ -272,7 +274,7 @@ static esp_err_t lcd_init(board_orient_t orient)
 
 esp_err_t board_lcd_draw_async(int x0, int y0, int x1, int y1, const void *px, board_lcd_done_cb_t done, void *ctx)
 {
-    for (int i = 0; s_rf_waiting && i < 50; i++) {
+    for (int i = 0; atomic_load(&s_rf_waiting) > 0 && i < 50; i++) {
         xSemaphoreTake(s_rf_done, pdMS_TO_TICKS(10)); /* let the pending capture go first */
     }
     ESP_RETURN_ON_FALSE(xSemaphoreTake(s_rf_token, pdMS_TO_TICKS(500)) == pdTRUE, ESP_ERR_TIMEOUT, TAG,
@@ -298,9 +300,9 @@ esp_err_t board_lcd_draw(int x0, int y0, int x1, int y1, const void *px)
 
 esp_err_t board_rf_quiet_begin(uint32_t timeout_ms)
 {
-    s_rf_waiting++;
+    atomic_fetch_add(&s_rf_waiting, 1);
     bool ok = xSemaphoreTake(s_rf_token, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
-    s_rf_waiting--;
+    atomic_fetch_sub(&s_rf_waiting, 1);
     return ok ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
