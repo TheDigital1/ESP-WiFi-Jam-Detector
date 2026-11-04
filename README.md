@@ -9,10 +9,29 @@ It never transmits, injects or deauthenticates anything. It can show that the
 RF environment changed; it cannot prove intent. A microwave oven will look
 like interference on 2.4 GHz.
 
-Status: milestones M0–M6 done (board bring-up, receiver, full sweep, live
-spectrum, detection, status/spectrum/settings screens with settings kept in
-flash, alarm beep, waterfall, TF-card event log, battery level), plus alarm
-waterfall snapshots to the TF card and a setting to scan only one band.
+## Features
+
+- **Standalone:** runs entirely on the ESP32-C5 board; no PC, phone or
+  network needed.
+- **Both Wi-Fi bands:** sweeps 2400–2483.5 MHz and 5150–5895 MHz in 48 MHz
+  slices at 80 MS/s, stitched into one spectrum per band (312.5 kHz bins).
+  About 4.5 sweeps/s on 2.4 GHz and one 5 GHz sweep every 0.83 s.
+- **Single-band mode:** turn either band off; 2.4 GHz alone runs at about
+  12 sweeps/s.
+- **Learns normal:** a 60 s per-bin baseline, stored in flash and tracked for
+  slow drift.
+- **Four detectors:** raised wideband floor, persistent narrowband carrier,
+  swept signal and pulsed wideband energy, with NORMAL / SUSPECT / ALARM
+  states.
+- **Alarms:** flashing red border and an optional beep through the on-board
+  speaker.
+- **Screens:** status tiles per band, live spectrum (~10 fps) with max-hold
+  and baseline, scrolling waterfall, and touch settings for every threshold.
+- **TF-card logging:** a CSV row for every state change. About 2 minutes
+  after each alarm, a BMP of the waterfall with the alarm row in the middle.
+- **Battery level** from the AXP2101 power chip.
+- **Receive only:** no transmit, injection or deauth code, and Wi-Fi
+  networking is off while scanning.
 
 ## On the device
 
