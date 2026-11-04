@@ -11,7 +11,18 @@ like interference on 2.4 GHz.
 
 Status: milestones M0–M6 done (board bring-up, receiver, full sweep, live
 spectrum, detection, status/spectrum/settings screens with settings kept in
-flash, alarm beep, waterfall, TF-card event log, battery level).
+flash, alarm beep, waterfall, TF-card event log, battery level), plus alarm
+waterfall snapshots to the TF card and a setting to scan only one band.
+
+## On the device
+
+| Status screen | 2.4 GHz waterfall (5 GHz off) | 5 GHz waterfall (2.4 GHz off) |
+|---|---|---|
+| ![Status screen: both bands NORMAL](docs/media/status.gif) | ![2.4 GHz waterfall with busy Wi-Fi on channels 1, 6 and 11](docs/media/waterfall-2g4.gif) | ![5 GHz waterfall, mostly quiet with activity around channels 140-165](docs/media/waterfall-5g.gif) |
+
+| Settings: General | Settings: Detection | Settings: Scan & timing |
+|---|---|---|
+| ![General settings: re-learn, auto-range, card and battery status, brightness, alarm beep](docs/media/settings-general.jpg) | ![Detection thresholds](docs/media/settings-detection.jpg) | ![Scan bands toggles and alarm timing](docs/media/settings-scan.jpg) |
 
 ## Build and flash
 

@@ -4,3 +4,5 @@ sdkconfig
 sdkconfig.old
 managed_components/
 __pycache__/
+# full-size originals of the README media (docs/media holds the optimised copies)
+photos/
