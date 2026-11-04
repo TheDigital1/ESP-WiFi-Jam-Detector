@@ -336,6 +336,59 @@ static void test_config_and_api(void)
     detect_get_status(&d, &st);
     CHECK(st.state == DETECT_LEARNING, "gain change -> %s", detect_state_name(st.state));
     CHECK(st.alarms == 1, "alarm count %u", (unsigned)st.alarms);
+
+    /* Band turned off mid-learn: pausing restarts the learn. */
+    detect_pause(&d);
+    detect_get_status(&d, &st);
+    CHECK(st.state == DETECT_LEARNING && st.learn_pct == 0, "pause while learning -> %s %u%%",
+          detect_state_name(st.state), st.learn_pct);
+
+    /* Band turned off in ALARM: pausing drops to NORMAL with the baseline kept,
+     * and after a gap a quiet band raises nothing; the tone must build up again. */
+    {
+        detect_t d3;
+        CHECK(detect_init(&d3, p, &cfg, s_mem[1], detect_mem_bytes(p)) == 0, "pause: init");
+        detect_input_t q = in;
+        q.gain = 60;
+        q.avg_cdb = q.min_cdb = q.max_cdb = flat;
+        for (t = 0; t <= 6000; t += 500) { /* learn, as above */
+            q.t_ms = t;
+            detect_sweep(&d3, &q, &ev);
+        }
+        q.avg_cdb = q.min_cdb = q.max_cdb = tone;
+        uint32_t ta = 0;
+        for (t = 6500; t < 30000 && !ta; t += 500) {
+            q.t_ms = t;
+            if (detect_sweep(&d3, &q, &ev) && ev.to == DETECT_ALARM) {
+                ta = t;
+            }
+        }
+        CHECK(ta, "pause: tone ALARM");
+        int16_t b3[BP_MAX_BINS], before[BP_MAX_BINS];
+        detect_get_baseline(&d3, before);
+        detect_pause(&d3);
+        detect_get_baseline(&d3, b3);
+        detect_get_status(&d3, &st);
+        CHECK(st.state == DETECT_NORMAL && !memcmp(b3, before, p->n_bins * sizeof(int16_t)), "pause in ALARM -> %s",
+              detect_state_name(st.state));
+        q.avg_cdb = q.min_cdb = q.max_cdb = flat;
+        bool quiet = true;
+        for (t += 600000; t < 700000; t += 500) { /* 10 min off, then 1.5 min of quiet sweeps */
+            q.t_ms = t;
+            quiet &= !detect_sweep(&d3, &q, &ev);
+        }
+        CHECK(quiet, "pause: quiet band after the gap raised %s", detect_state_name(ev.to));
+        q.avg_cdb = q.min_cdb = q.max_cdb = tone;
+        uint32_t t_on = t, ta2 = 0;
+        for (; t < t_on + 20000 && !ta2; t += 500) {
+            q.t_ms = t;
+            if (detect_sweep(&d3, &q, &ev) && ev.to == DETECT_ALARM) {
+                ta2 = t - t_on;
+            }
+        }
+        CHECK(ta2 >= ta - 6500 - 1000 && ta2 <= ta - 6500 + 1000, "pause: ALARM again after %u ms (first %u ms)",
+              (unsigned)ta2, (unsigned)(ta - 6500));
+    }
 }
 
 int main(int argc, char **argv)

@@ -141,7 +141,11 @@ void ui_status_update(const ui_snap_t *s)
         const detect_status_t *st = &s->st[b];
         sweep_view_t v = {0}; /* no buffers: metadata only */
         sweep_get_view((band_id_t)b, &v);
-        if (s->sweep != SWEEP_RUNNING) {
+        if (!s->scan[b]) {
+            colour_tile(t, DETECT_LEARNING);
+            ui_set_text(t->state, "OFF");
+            ui_set_text(t->why, "not scanned (Settings, Scan & timing)");
+        } else if (s->sweep != SWEEP_RUNNING) {
             colour_tile(t, DETECT_LEARNING);
             ui_set_text(t->state, s->sweep == SWEEP_FAILED ? "SWEEP FAILED" : "auto-ranging");
             ui_set_text(t->why, s->sweep == SWEEP_FAILED ? "see the serial log" : "choosing the receiver gain");
@@ -157,7 +161,7 @@ void ui_status_update(const ui_snap_t *s)
             why_text(text, sizeof(text), st, s->now_ms);
             ui_set_text(t->why, text);
         }
-        const bool live = s->sweep == SWEEP_RUNNING && st->state != DETECT_LEARNING;
+        const bool live = s->sweep == SWEEP_RUNNING && s->scan[b] && st->state != DETECT_LEARNING;
         if (live) {
             snprintf(text, sizeof(text), "floor %+.1f dB, cont. %+.1f dB", st->m.floor_delta_cdb / 100.0f,
                      st->m.cont_delta_cdb / 100.0f);
@@ -179,7 +183,11 @@ void ui_status_update(const ui_snap_t *s)
             snprintf(text, sizeof(text), "no alarm since boot");
         }
         ui_set_text(t->last, text);
-        snprintf(text, sizeof(text), "%.1f sweeps/s, gain %u", v.sweeps_per_10s / 10.0f, v.gain);
+        if (s->scan[b]) {
+            snprintf(text, sizeof(text), "%.1f sweeps/s, gain %u", v.sweeps_per_10s / 10.0f, v.gain);
+        } else {
+            snprintf(text, sizeof(text), "not swept, gain %u", v.gain);
+        }
         ui_set_text(t->rate, text);
     }
 }

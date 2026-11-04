@@ -48,6 +48,7 @@ static band_ctx_t s_band[BAND_COUNT];
 static QueueHandle_t s_queue; /* (band << 1) | slot */
 static SemaphoreHandle_t s_lock;
 static volatile bool s_relearn;
+static volatile bool s_scan[BAND_COUNT] = {true, true};
 static uint8_t *s_rec; /* baseline record, PSRAM; detect task only (and start) */
 static size_t s_rec_cap;
 
@@ -144,6 +145,10 @@ static void detector_task(void *arg)
         }
         band_ctx_t *b = &s_band[item >> 1];
         const unsigned slot = item & 1u;
+        if (!s_scan[item >> 1]) {
+            b->busy[slot] = false; /* finished just before the band was turned off */
+            continue;
+        }
         const sweep_meta_t *m = &b->meta[slot];
         const detect_input_t in = {
             .avg_cdb = b->spec[slot][0],
@@ -273,6 +278,18 @@ esp_err_t detector_set_config(const detect_config_t *cfg)
     }
     xSemaphoreGive(s_lock);
     return ESP_OK;
+}
+
+void detector_set_scan(const bool scan[BAND_COUNT])
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < BAND_COUNT; i++) {
+        if (s_scan[i] != scan[i]) {
+            detect_pause(&s_band[i].det); /* no stale alarm while off, no stale evidence after */
+            s_scan[i] = scan[i];
+        }
+    }
+    xSemaphoreGive(s_lock);
 }
 
 void detector_relearn(void)

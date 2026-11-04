@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Settings screen: re-learn, auto-range, defaults, detection thresholds,
- * sweep weighting, alarm beep and brightness. Changes apply when a slider
+ * bands scanned, sweep weighting, alarm beep and brightness. Changes apply when a slider
  * is released and are saved to flash SAVE_IDLE_MS after the last change, or
  * when the screen is left.
  *
@@ -33,7 +33,7 @@ typedef enum {
     P_COUNT
 } page_t;
 
-static const char *const s_page_name[P_COUNT] = {"General", "Detection", "Timing"};
+static const char *const s_page_name[P_COUNT] = {"General", "Detection", "Scan & timing"};
 
 typedef enum {
     F_LEARN,
@@ -69,13 +69,13 @@ static const field_info_t s_info[F_COUNT] = {
     [F_DUTY] = {"Alarm duty", "%", 30, 100, 5, P_TIMING},
     [F_HOLD] = {"Alarm after", "s", 2, 20, 1, P_TIMING},
     [F_CLEAR] = {"Clear after", "s", 3, 60, 1, P_TIMING},
-    [F_WEIGHT] = {"2.4 sweeps per 5 GHz", "", 1, 6, 1, P_GENERAL},
+    [F_WEIGHT] = {"2.4 sweeps per 5 GHz", "", 1, 6, 1, P_TIMING},
     [F_BRIGHT] = {"Brightness", "%", 10, 100, 5, P_GENERAL},
 };
 
 static settings_t s_work;
 static lv_obj_t *s_slider[F_COUNT], *s_value[F_COUNT];
-static lv_obj_t *s_beep, *s_info_label;
+static lv_obj_t *s_beep, *s_info_label, *s_scan[BAND_COUNT];
 static lv_obj_t *s_page[P_COUNT], *s_tab[P_COUNT];
 static page_t s_cur_page;
 static bool s_dirty;
@@ -148,6 +148,10 @@ static void apply(void)
         err = sweep_set_weights(w);
     }
     if (err == ESP_OK) {
+        detector_set_scan(s_work.scan); /* before the sweep: no stale alarm in between */
+        err = sweep_set_scan(s_work.scan);
+    }
+    if (err == ESP_OK) {
         err = board_backlight_set(s_work.brightness);
     }
     if (err != ESP_OK) {
@@ -202,6 +206,21 @@ static void beep_cb(lv_event_t *e)
     changed();
 }
 
+static void scan_cb(lv_event_t *e)
+{
+    const band_id_t b = (band_id_t)(uintptr_t)lv_event_get_user_data(e);
+    const band_id_t other = b == BAND_24 ? BAND_5 : BAND_24;
+    const bool on = lv_obj_has_state(s_scan[b], LV_STATE_CHECKED);
+    if (!on && !s_work.scan[other]) {
+        lv_obj_add_state(s_scan[b], LV_STATE_CHECKED); /* one band always stays on */
+        return;
+    }
+    s_work.scan[b] = on;
+    apply();
+    changed();
+    ESP_LOGI(TAG, "scan %s %s", sweep_plan(b)->name, on ? "on" : "off");
+}
+
 static void test_beep_cb(lv_event_t *e)
 {
     LV_UNUSED(e);
@@ -216,6 +235,9 @@ static void load_controls(void)
         show_value((field_t)f, v);
     }
     lv_obj_set_state(s_beep, LV_STATE_CHECKED, s_work.beep);
+    for (int b = 0; b < BAND_COUNT; b++) {
+        lv_obj_set_state(s_scan[b], LV_STATE_CHECKED, s_work.scan[b]);
+    }
 }
 
 static void relearn_cb(lv_event_t *e)
@@ -310,10 +332,11 @@ lv_obj_t *ui_settings_create(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
     lv_label_set_text(title, "Settings");
     lv_obj_set_pos(title, 8, 9);
-    for (int p = 0; p < P_COUNT; p++) {
+    static const int32_t tab_w[P_COUNT] = {96, 100, 130}; /* sum + gaps clear the title */
+    for (int p = 0, x = BOARD_LCD_W - 4 - (96 + 100 + 130 + 2 * 6); p < P_COUNT; x += tab_w[p] + 6, p++) {
         lv_obj_t *tab = lv_button_create(scr);
-        lv_obj_set_size(tab, 106, 32);
-        lv_obj_set_pos(tab, BOARD_LCD_W - 4 - (P_COUNT - p) * 112, 4);
+        lv_obj_set_size(tab, tab_w[p], 32);
+        lv_obj_set_pos(tab, x, 4);
         /* unchecked tabs are dim; the checked one keeps the theme colour */
         lv_obj_set_style_bg_color(tab, lv_color_hex(0x2a3038), 0);
         lv_obj_set_style_bg_color(tab, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
@@ -340,6 +363,22 @@ lv_obj_t *ui_settings_create(void)
     lv_obj_set_width(s_info_label, lv_pct(100));
     lv_label_set_long_mode(s_info_label, LV_LABEL_LONG_MODE_WRAP);
     lv_label_set_text(s_info_label, "");
+
+    /* First on its page: which bands are swept. Checkable buttons, lit when on. */
+    lv_obj_t *scan_row = add_row(s_page[P_TIMING], "Scan bands");
+    for (int b = BAND_COUNT - 1, x = -8; b >= 0; b--, x -= 96) {
+        lv_obj_t *btn = lv_button_create(scan_row);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, sweep_plan((band_id_t)b)->name);
+        lv_obj_center(l);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+        lv_obj_set_size(btn, 88, 32);
+        lv_obj_align(btn, LV_ALIGN_RIGHT_MID, x, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3038), 0);
+        lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_BLUE), LV_STATE_CHECKED);
+        lv_obj_add_event_cb(btn, scan_cb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)b);
+        s_scan[b] = btn;
+    }
 
     for (int f = 0; f < F_COUNT; f++) {
         lv_obj_t *row = add_row(s_page[s_info[f].page], s_info[f].name);

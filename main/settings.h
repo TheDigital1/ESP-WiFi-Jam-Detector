@@ -1,8 +1,8 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Persistent settings (thresholds, sweep weighting, auto-range gains, beep,
- * brightness) and learned baselines, in the "jd_nvs" partition.
+ * Persistent settings (thresholds, sweep weighting, bands scanned, auto-range
+ * gains, beep, brightness) and learned baselines, in the "jd_nvs" partition.
  */
 #pragma once
 
@@ -21,6 +21,7 @@ typedef struct {
     uint8_t gain[BAND_COUNT];   /* last auto-range result, or SETTINGS_GAIN_NONE */
     bool beep;                  /* alarm beep (M6) */
     uint8_t brightness;         /* backlight, percent */
+    bool scan[BAND_COUNT];      /* band swept; at least one */
 } settings_t;
 
 void settings_default(settings_t *s);

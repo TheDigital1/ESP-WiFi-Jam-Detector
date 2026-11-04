@@ -29,6 +29,7 @@ typedef struct {
     uint32_t now_ms; /* same clock as the detector's times */
     board_power_t power;
     bool power_ok;
+    bool scan[BAND_COUNT]; /* band being swept */
 } ui_snap_t;
 
 void ui_show(ui_screen_t screen);

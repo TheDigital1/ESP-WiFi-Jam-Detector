@@ -149,7 +149,8 @@ static void refresh_timer(lv_timer_t *t)
     bool alarm = false;
     for (int b = 0; b < BAND_COUNT; b++) {
         detector_get_status((band_id_t)b, &s.st[b]);
-        alarm |= s.sweep == SWEEP_RUNNING && s.st[b].state == DETECT_ALARM;
+        s.scan[b] = sweep_scanned((band_id_t)b);
+        alarm |= s.sweep == SWEEP_RUNNING && s.scan[b] && s.st[b].state == DETECT_ALARM;
     }
     ui_spectrum_feed(&s);
     if (alarm && (!was_alarm || s.now_ms - beep_ms >= BEEP_REPEAT_MS)) {

@@ -19,5 +19,8 @@ esp_err_t detector_get_status(band_id_t band, detect_status_t *out);
 esp_err_t detector_get_baseline(band_id_t band, int16_t *out);
 /* New thresholds for both bands; baselines are kept. */
 esp_err_t detector_set_config(const detect_config_t *cfg);
+/* Bands being swept. A band turned off or on again drops its evidence and
+ * goes back to NORMAL (baseline kept), so an alarm never outlives its band. */
+void detector_set_scan(const bool scan[BAND_COUNT]);
 /* Forget both baselines (stored ones too) and learn again (takes effect on the next sweep). */
 void detector_relearn(void);

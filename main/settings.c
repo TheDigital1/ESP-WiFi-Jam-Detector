@@ -1,6 +1,7 @@
 /*
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+#include <stddef.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -15,7 +16,8 @@ static const char *TAG = "settings";
 #define PARTITION   "jd_nvs"
 #define NAMESPACE   "jd"
 #define KEY_CFG     "cfg"
-#define CFG_VERSION 1u /* bump when settings_t changes */
+#define CFG_VERSION 2u /* bump when settings_t changes */
+#define V1_SIZE     offsetof(settings_t, scan) /* version 1 ended before scan[] */
 
 typedef struct {
     uint32_t version, size;
@@ -36,14 +38,20 @@ void settings_default(settings_t *s)
     s->gain[BAND_24] = s->gain[BAND_5] = SETTINGS_GAIN_NONE;
     s->beep = false;
     s->brightness = 80;
+    s->scan[BAND_24] = s->scan[BAND_5] = true;
 }
 
 int settings_check(const settings_t *s)
 {
+    bool any = false;
     for (int b = 0; b < BAND_COUNT; b++) {
         if (s->weight[b] < 1 || s->weight[b] > 8) {
             return -1;
         }
+        any |= s->scan[b];
+    }
+    if (!any) {
+        return -1;
     }
     return detect_check_config(&s->det) == 0 && s->brightness >= 5 && s->brightness <= 100 ? 0 : -1;
 }
@@ -111,6 +119,16 @@ esp_err_t settings_init(void)
         settings_check(&st.s) == 0) {
         s_cur = st.s;
         ESP_LOGI(TAG, "loaded; gains %u / %u", s_cur.gain[BAND_24], s_cur.gain[BAND_5]);
+    } else if (err == ESP_OK && st.version == 1 && st.size == V1_SIZE && len >= offsetof(stored_t, s) + V1_SIZE) {
+        /* Version 1: same fields up to scan[], which defaults to both bands. */
+        settings_t s;
+        settings_default(&s);
+        memcpy(&s, &st.s, V1_SIZE);
+        if (settings_check(&s) == 0) {
+            s_cur = s;
+            ESP_LOGI(TAG, "loaded (version 1, both bands scanned); gains %u / %u", s_cur.gain[BAND_24],
+                     s_cur.gain[BAND_5]);
+        }
     } else if (err == ESP_ERR_NOT_FOUND) {
         ESP_LOGI(TAG, "none stored, using defaults");
     } else {

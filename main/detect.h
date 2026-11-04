@@ -177,6 +177,10 @@ int detect_init(detect_t *d, const band_plan_t *plan, const detect_config_t *cfg
 int detect_set_config(detect_t *d, const detect_config_t *cfg);
 /* Forget the baseline and learn again from the next sweep. */
 void detect_relearn(detect_t *d);
+/* The band stops (or starts again) being swept: drop the evidence so far and
+ * return to NORMAL with the baseline kept, or restart an unfinished learn.
+ * No event is reported. */
+void detect_pause(detect_t *d);
 
 /* Process one sweep. Returns true and fills *ev on a state change. */
 bool detect_sweep(detect_t *d, const detect_input_t *in, detect_event_t *ev);

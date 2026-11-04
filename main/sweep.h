@@ -21,6 +21,7 @@ typedef struct {
     uint32_t usable_hz;           /* centre span kept per capture */
     unsigned snapshots;           /* K per tune */
     unsigned weight[BAND_COUNT];  /* sweeps of each band per schedule round */
+    bool scan[BAND_COUNT];        /* band swept at all; at least one */
     unsigned gain[BAND_COUNT];    /* manual gain index, or SWEEP_GAIN_AUTO */
     unsigned yield_pct;           /* CPU share left to other tasks (UI, detect, idle), 0..90 */
     /* Called from the sweep task after every auto-range, with the gains now in use. */
@@ -74,6 +75,10 @@ esp_err_t sweep_get_view(band_id_t band, sweep_view_t *out);
 void sweep_reset_maxhold(band_id_t band);
 /* Schedule weights, from the next round on (1..8 each). */
 esp_err_t sweep_set_weights(const unsigned weight[BAND_COUNT]);
+/* Bands swept, from the next round on; at least one. A band that is off
+ * keeps its gain and plan, and its view stops updating. */
+esp_err_t sweep_set_scan(const bool scan[BAND_COUNT]);
+bool sweep_scanned(band_id_t band);
 /* Auto-range both bands again after the current sweep. */
 void sweep_autorange(void);
 

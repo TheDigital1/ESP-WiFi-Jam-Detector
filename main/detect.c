@@ -170,21 +170,37 @@ static void swept_reset(detect_t *d)
     d->sw_run_ms = 0;
 }
 
+/* Evidence histories and the swept tracker; the baseline is kept. */
+static void clear_history(detect_t *d)
+{
+    d->t_head = d->t_count = 0;
+    d->ev_hist = d->strong_hist = 0;
+    memset(d->cw_hist, 0, d->n_bins * sizeof(uint32_t));
+    memset(d->cell_hist, 0, d->n_cells * sizeof(uint32_t));
+    swept_reset(d);
+    d->st.kind = DETECT_NONE;
+    memset(&d->st.m, 0, sizeof(d->st.m));
+}
+
 void detect_relearn(detect_t *d)
 {
     d->learn_n = 0;
     d->learn_stride = 1;
     d->learn_seen = 0;
     d->learn_started = false;
-    d->t_head = d->t_count = 0;
-    d->ev_hist = d->strong_hist = 0;
-    memset(d->cw_hist, 0, d->n_bins * sizeof(uint32_t));
-    memset(d->cell_hist, 0, d->n_cells * sizeof(uint32_t));
-    swept_reset(d);
+    clear_history(d);
     d->st.state = DETECT_LEARNING;
-    d->st.kind = DETECT_NONE;
     d->st.learn_pct = 0;
-    memset(&d->st.m, 0, sizeof(d->st.m));
+}
+
+void detect_pause(detect_t *d)
+{
+    if (d->st.state == DETECT_LEARNING) {
+        detect_relearn(d); /* a learn interrupted by a gap starts again */
+        return;
+    }
+    clear_history(d);
+    d->st.state = DETECT_NORMAL;
 }
 
 static int16_t cell_floor_of(detect_t *d, const int16_t *cdb, unsigned c)

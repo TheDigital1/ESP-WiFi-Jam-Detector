@@ -67,13 +67,18 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
   cyan → yellow → red +30 dB; absolute level while learning). The left margin
   shows the age of the rows. History (236 sweeps, ~2–4 min) is kept for both
   bands all the time.
-- **Settings:** three tabs (General, Detection, Timing) instead of a
+- **Settings:** three tabs (General, Detection, Scan & timing) instead of a
   scrolling list, because a full-screen LVGL redraw costs ~80 ms of CPU here
   and scrolling ran at a few frames/s while starving the sweep. Re-learn,
   auto-range gain, defaults; detection thresholds, sweep weighting and
   brightness (applied when a slider is released, saved to
   flash 2 s later or when leaving the screen); alarm beep on/off and **Test**.
   The General tab also shows the TF-card and power status.
+- **Scan bands** (Scan & timing tab): 2.4 GHz and 5 GHz can each be turned
+  off; one always stays on. With 5 GHz off, 2.4 GHz is swept about 12 times
+  a second instead of about 4.5. A band that is off shows **OFF** on the
+  status screen, never alarms, and its detector restarts from NORMAL (baseline
+  kept) when it is turned back on.
 - Any ALARM flashes a red border on every screen. With **Alarm beep** on, it
   also beeps three times (2 kHz) on entering ALARM and every 15 s while it
   lasts. The codec, I2S and amplifier only run during a beep; with beeps

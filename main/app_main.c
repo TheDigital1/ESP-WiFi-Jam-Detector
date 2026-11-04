@@ -99,10 +99,12 @@ static esp_err_t start(void)
     };
     for (int b = 0; b < BAND_COUNT; b++) {
         cfg.weight[b] = set.weight[b];
+        cfg.scan[b] = set.scan[b];
         cfg.gain[b] = set.gain[b] == SETTINGS_GAIN_NONE ? SWEEP_GAIN_AUTO : set.gain[b];
     }
     ESP_RETURN_ON_ERROR(sweep_start(&cfg), TAG, "sweep");
     ESP_RETURN_ON_ERROR(detector_start(&set.det), TAG, "detector");
+    detector_set_scan(set.scan);
     ESP_RETURN_ON_ERROR(lvp_init(), TAG, "lvgl");
     ESP_RETURN_ON_ERROR(ui_init(), TAG, "ui");
     ESP_RETURN_ON_ERROR(board_backlight_set(set.brightness), TAG, "backlight");

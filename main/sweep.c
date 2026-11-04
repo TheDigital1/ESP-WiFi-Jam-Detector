@@ -273,7 +273,7 @@ static void sweep_task(void *arg)
     int64_t window_start = esp_timer_get_time();
     while (err == ESP_OK) {
         for (int i = 0; i < BAND_COUNT && err == ESP_OK; i++) {
-            for (unsigned w = 0; w < s_cfg.weight[i] && err == ESP_OK && !s_autorange; w++) {
+            for (unsigned w = 0; s_cfg.scan[i] && w < s_cfg.weight[i] && err == ESP_OK && !s_autorange; w++) {
                 err = sweep_band(&s_band[i]);
             }
         }
@@ -320,6 +320,7 @@ esp_err_t sweep_start(const sweep_config_t *cfg)
     for (int i = 0; i < BAND_COUNT; i++) {
         ESP_RETURN_ON_FALSE(cfg->weight[i] >= 1 && cfg->weight[i] <= 8, ESP_ERR_INVALID_ARG, TAG, "bad weight");
     }
+    ESP_RETURN_ON_FALSE(cfg->scan[BAND_24] || cfg->scan[BAND_5], ESP_ERR_INVALID_ARG, TAG, "no band scanned");
     s_cfg = *cfg;
     s_lock = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_lock, ESP_ERR_NO_MEM, TAG, "lock");
@@ -422,6 +423,23 @@ esp_err_t sweep_set_weights(const unsigned weight[BAND_COUNT])
         s_cfg.weight[i] = weight[i]; /* read once per round by the sweep task */
     }
     return ESP_OK;
+}
+
+esp_err_t sweep_set_scan(const bool scan[BAND_COUNT])
+{
+    ESP_RETURN_ON_FALSE(scan[BAND_24] || scan[BAND_5], ESP_ERR_INVALID_ARG, TAG, "no band scanned");
+    for (int i = 0; i < BAND_COUNT; i++) {
+        if (s_cfg.scan[i] != scan[i]) {
+            ESP_LOGI(TAG, "%s %s", s_band[i].plan.name, scan[i] ? "scanned" : "off");
+        }
+        s_cfg.scan[i] = scan[i]; /* read before each sweep by the sweep task */
+    }
+    return ESP_OK;
+}
+
+bool sweep_scanned(band_id_t band)
+{
+    return band < BAND_COUNT && s_cfg.scan[band];
 }
 
 void sweep_autorange(void)

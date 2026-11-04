@@ -565,7 +565,9 @@ void ui_spectrum_update(const ui_snap_t *snap)
 
     char text[96], state[64];
     const sweep_state_t sw = snap->sweep;
-    if (sw == SWEEP_RUNNING) {
+    if (!snap->scan[s_band]) {
+        snprintf(text, sizeof(text), "%s  off (not scanned)", p->name);
+    } else if (sw == SWEEP_RUNNING) {
         ui_state_text(state, sizeof(state), &st[s_band]);
         snprintf(text, sizeof(text), "%s  %s", p->name, state);
     } else {
@@ -573,10 +575,11 @@ void ui_spectrum_update(const ui_snap_t *snap)
     }
     const band_id_t other = s_band == BAND_24 ? BAND_5 : BAND_24;
     char rates[40];
+    const bool other_live = sw == SWEEP_RUNNING && snap->scan[other];
     snprintf(rates, sizeof(rates), "%s: %s", sweep_plan(other)->name,
-             sw == SWEEP_RUNNING ? short_state(&st[other]) : "-");
+             !snap->scan[other] ? "off" : (sw == SWEEP_RUNNING ? short_state(&st[other]) : "-"));
     ui_set_text(s_rates, rates);
-    ui_set_colour(s_rates, sw == SWEEP_RUNNING ? ui_state_colour(st[other].state) : lv_color_white());
+    ui_set_colour(s_rates, other_live ? ui_state_colour(st[other].state) : lv_color_hex(0x9ab0c8));
     /* "INTERFERENCE: pulsed wideband" at 20 px would run into the other
      * band's state: the header gets what is left and ends in dots. */
     lv_point_t sz;
@@ -586,7 +589,8 @@ void ui_spectrum_update(const ui_snap_t *snap)
         lv_obj_set_width(s_header, header_w);
     }
     ui_set_text(s_header, text);
-    ui_set_colour(s_header, sw == SWEEP_RUNNING ? ui_state_colour(st[s_band].state) : lv_color_white());
+    ui_set_colour(s_header, !snap->scan[s_band] ? lv_color_hex(0x9ab0c8)
+                            : sw == SWEEP_RUNNING ? ui_state_colour(st[s_band].state) : lv_color_white());
     /* Sweep time rounded to 10 ms so the footer does not redraw every frame. */
     snprintf(text, sizeof(text), "gain %u  %u ms  clip %u/%u", s_view.gain,
              (unsigned)(s_view.last_sweep_ms + 5) / 10 * 10, s_view.clipped_snapshots, s_view.snapshots_per_sweep);
@@ -623,6 +627,13 @@ static void band_cb(lv_event_t *e)
 /* BAND_COUNT keeps the current band. */
 void ui_spectrum_enter(band_id_t band)
 {
+    if (band >= BAND_COUNT) {
+        band = s_band;
+        const band_id_t other = band == BAND_24 ? BAND_5 : BAND_24;
+        if (!sweep_scanned(band) && sweep_scanned(other)) {
+            band = other; /* open on a band that is being swept */
+        }
+    }
     if (band < BAND_COUNT && band != s_band) {
         s_band = band;
         build_axis();
