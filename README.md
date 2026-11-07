@@ -55,6 +55,22 @@ Click the GIF for the full 33 s video with sound (MP4, 5.4 MB).
 |---|---|---|
 | ![General settings: re-learn, auto-range, card and battery status, brightness, alarm beep](docs/media/settings-general.jpg) | ![Detection thresholds](docs/media/settings-detection.jpg) | ![Scan bands toggles and alarm timing](docs/media/settings-scan.jpg) |
 
+## Flash a release (no build)
+
+Download `esp-wifi-jammer-detector-vX.Y.Z-merged.bin` from
+[Releases](https://github.com/TheDigital1/ESP-WiFi-Jam-Detector/releases) and
+write it at offset 0 with esptool 5 (`pip install esptool`; on esptool 4 the
+command is `esptool.py ... write_flash`):
+
+```sh
+esptool --chip esp32c5 -p /dev/ttyACM0 -b 460800 write-flash 0x0 esp-wifi-jammer-detector-v1.0.0-merged.bin
+```
+
+Use the board's USB-C port (`COMx` on Windows). This keeps your settings and
+learned baselines; the separate `bootloader.bin` (0x2000),
+`partition-table.bin` (0x8000) and app (0x10000) are attached too, with
+`SHA256SUMS`.
+
 ## Build and flash
 
 The receiver depends on private PHY internals of one exact ESP-IDF commit, so

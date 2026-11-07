@@ -21,3 +21,4 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 - M5 done (status/spectrum/settings screens, settings tabs, NVS settings + gains + baselines in jd_nvs).
 - M6 done (alarm beep, waterfall, TF-card CSV event log, AXP2101 battery; all checked on device).
 - All brief milestones (M0-M6) complete.
+- v1.0.0 released (GitHub release, merged bin flashed and checked on device).
