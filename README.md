@@ -35,6 +35,18 @@ like interference on 2.4 GHz.
 
 ## On the device
 
+### Microwave oven test (2.4 GHz)
+
+A running microwave oven next to the device: the 2.4 GHz waterfall fills with
+pulsed wideband energy and the status screen goes to SUSPECT ("pulsed energy,
+busy Wi-Fi or microwave oven?"). 5 GHz scanning is off here.
+
+[![Microwave oven running next to the device: 2.4 GHz waterfall and SUSPECT status](docs/media/microwave-2g4.gif)](docs/media/microwave-2g4.mp4)
+
+Click the GIF for the full 33 s video with sound (MP4, 5.4 MB).
+
+### Screens
+
 | Status screen | 2.4 GHz waterfall (5 GHz off) | 5 GHz waterfall (2.4 GHz off) |
 |---|---|---|
 | ![Status screen: both bands NORMAL](docs/media/status.gif) | ![2.4 GHz waterfall with busy Wi-Fi on channels 1, 6 and 11](docs/media/waterfall-2g4.gif) | ![5 GHz waterfall, mostly quiet with activity around channels 140-165](docs/media/waterfall-5g.gif) |
