@@ -11,3 +11,9 @@
 
 /* lvp_init(), settings_init(), sweep_start() and detector_start() must have run. */
 esp_err_t ui_init(void);
+
+/* Change one setting from outside the UI (the USB link): key as in params.h,
+ * value checked against the slider's range. Applies, saves and updates the
+ * settings screen. Takes the LVGL lock; never call from LVGL callbacks.
+ * ESP_ERR_INVALID_ARG for an unknown key or a bad value. */
+esp_err_t ui_settings_set_key(const char *key, int value);

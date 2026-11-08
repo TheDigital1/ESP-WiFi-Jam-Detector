@@ -2,7 +2,7 @@
 # Host unit tests for the IDF-free modules. Run: make -C test_host
 CC ?= cc
 CFLAGS ?= -std=c17 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Werror
-INC = -I../main -I../components/espsdr_rx/upstream/common
+INC = -I../main -I../components/espsdr_rx/upstream/common -Istub
 BUILD = build
 
 TESTS = $(BUILD)/test_dsp $(BUILD)/test_bandplan $(BUILD)/test_plot
@@ -26,13 +26,19 @@ $(BUILD)/test_plot: test_plot.c ../main/plot.c ../main/plot.h | $(BUILD)
 $(BUILD)/test_detect: test_detect.c ../main/detect.c ../main/detect.h ../main/dsp.c ../main/bandplan.c | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -o $@ test_detect.c ../main/detect.c ../main/dsp.c ../main/bandplan.c -lm
 
+LINK_SRC = ../main/link_proto.c ../main/params.c ../main/settings_values.c ../main/detect.c ../main/dsp.c ../main/bandplan.c
+$(BUILD)/test_link: test_link.c $(LINK_SRC) ../main/link_proto.h ../main/params.h ../main/settings.h | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) -o $@ test_link.c $(LINK_SRC) -lm
+
 # Synthetic spectra (deterministic seeds); regenerated when the generator changes.
 $(SIM): ../tools/sim_spectra.py | $(BUILD)
 	python3 ../tools/sim_spectra.py --out $(BUILD)/sim
 	touch $@
 
-test: $(TESTS) $(BUILD)/test_detect $(SIM)
+test: $(TESTS) $(BUILD)/test_detect $(BUILD)/test_link $(SIM)
 	@for t in $(TESTS); do ./$$t || exit 1; done
+	./$(BUILD)/test_link $(BUILD)/link_samples.jsonl
+	python3 -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1])]; print("link samples: valid JSON")' $(BUILD)/link_samples.jsonl
 	./$(BUILD)/test_detect $(BUILD)/sim
 
 clean:

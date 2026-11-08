@@ -22,6 +22,7 @@
 #include "characterize.h"
 #include "detector.h"
 #include "eventlog.h"
+#include "link.h"
 #include "espsdr_rx.h"
 #include "lvgl_port.h"
 #include "settings.h"
@@ -107,6 +108,7 @@ static esp_err_t start(void)
     detector_set_scan(set.scan);
     ESP_RETURN_ON_ERROR(lvp_init(), TAG, "lvgl");
     ESP_RETURN_ON_ERROR(ui_init(), TAG, "ui");
+    ESP_RETURN_ON_ERROR(link_start(), TAG, "USB link");
     ESP_RETURN_ON_ERROR(board_backlight_set(set.brightness), TAG, "backlight");
     return ESP_OK;
 }

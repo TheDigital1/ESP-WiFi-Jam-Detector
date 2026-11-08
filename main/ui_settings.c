@@ -16,7 +16,10 @@
 #include "board.h"
 #include "eventlog.h"
 #include "detector.h"
+#include "lvgl_port.h"
+#include "params.h"
 #include "settings.h"
+#include "ui.h"
 #include "ui_priv.h"
 
 static const char *TAG = "ui_settings";
@@ -35,128 +38,52 @@ typedef enum {
 
 static const char *const s_page_name[P_COUNT] = {"General", "Detection", "Scan & timing"};
 
-typedef enum {
-    F_LEARN,
-    F_WIDE_DB,
-    F_WIDE_PCT,
-    F_CW_DB,
-    F_CW_PCT,
-    F_SWEPT_DB,
-    F_SWEPT_PCT,
-    F_DUTY,
-    F_HOLD,
-    F_CLEAR,
-    F_WEIGHT,
-    F_BRIGHT,
-    F_COUNT
-} field_t;
-
-typedef struct {
-    const char *name, *unit;
-    int min, max, step;
-    page_t page;
-} field_info_t;
-
-/* Slider ranges are tighter than detect_check_config(): only sensible values. */
-static const field_info_t s_info[F_COUNT] = {
-    [F_LEARN] = {"Learn time", "s", 10, 300, 10, P_TIMING},
-    [F_WIDE_DB] = {"Wideband rise", "dB", 3, 30, 1, P_DETECTION},
-    [F_WIDE_PCT] = {"Wideband share", "%", 20, 100, 5, P_DETECTION},
-    [F_CW_DB] = {"Narrowband rise", "dB", 6, 40, 1, P_DETECTION},
-    [F_CW_PCT] = {"Narrowband persist", "%", 50, 100, 5, P_DETECTION},
-    [F_SWEPT_DB] = {"Swept rise", "dB", 6, 40, 1, P_DETECTION},
-    [F_SWEPT_PCT] = {"Swept coverage", "%", 20, 100, 5, P_DETECTION},
-    [F_DUTY] = {"Alarm duty", "%", 30, 100, 5, P_TIMING},
-    [F_HOLD] = {"Alarm after", "s", 2, 20, 1, P_TIMING},
-    [F_CLEAR] = {"Clear after", "s", 3, 60, 1, P_TIMING},
-    [F_WEIGHT] = {"2.4 sweeps per 5 GHz", "", 1, 6, 1, P_TIMING},
-    [F_BRIGHT] = {"Brightness", "%", 10, 100, 5, P_GENERAL},
+/* Page of each slider (params.c has names, keys and ranges). */
+static const page_t s_param_page[PARAM_COUNT] = {
+    [PARAM_LEARN] = P_TIMING,     [PARAM_WIDE_DB] = P_DETECTION,  [PARAM_WIDE_PCT] = P_DETECTION,
+    [PARAM_CW_DB] = P_DETECTION,  [PARAM_CW_PCT] = P_DETECTION,   [PARAM_SWEPT_DB] = P_DETECTION,
+    [PARAM_SWEPT_PCT] = P_DETECTION, [PARAM_DUTY] = P_TIMING,     [PARAM_HOLD] = P_TIMING,
+    [PARAM_CLEAR] = P_TIMING,     [PARAM_WEIGHT] = P_TIMING,      [PARAM_BRIGHT] = P_GENERAL,
 };
 
 static settings_t s_work;
-static lv_obj_t *s_slider[F_COUNT], *s_value[F_COUNT];
+static lv_obj_t *s_slider[PARAM_COUNT], *s_value[PARAM_COUNT];
 static lv_obj_t *s_beep, *s_info_label, *s_scan[BAND_COUNT];
 static lv_obj_t *s_page[P_COUNT], *s_tab[P_COUNT];
 static page_t s_cur_page;
 static bool s_dirty;
 static uint32_t s_changed_ms;
 
-static int get(const settings_t *s, field_t f)
-{
-    const detect_config_t *c = &s->det;
-    switch (f) {
-    case F_LEARN: return c->learn_s;
-    case F_WIDE_DB: return c->wide_cdb / 100;
-    case F_WIDE_PCT: return c->wide_pct;
-    case F_CW_DB: return c->cw_cdb / 100;
-    case F_CW_PCT: return c->cw_pct;
-    case F_SWEPT_DB: return c->swept_cdb / 100;
-    case F_SWEPT_PCT: return c->swept_cover_pct;
-    case F_DUTY: return c->duty_pct;
-    case F_HOLD: return c->hold_s;
-    case F_CLEAR: return c->clear_s;
-    case F_WEIGHT: return s->weight[BAND_24];
-    case F_BRIGHT: return s->brightness;
-    default: return 0;
-    }
-}
-
-static void set(settings_t *s, field_t f, int v)
-{
-    detect_config_t *c = &s->det;
-    switch (f) {
-    case F_LEARN: c->learn_s = (uint16_t)v; break;
-    case F_WIDE_DB: c->wide_cdb = (int16_t)(v * 100); break;
-    case F_WIDE_PCT: c->wide_pct = (uint8_t)v; break;
-    case F_CW_DB: c->cw_cdb = (int16_t)(v * 100); break;
-    case F_CW_PCT: c->cw_pct = (uint8_t)v; break;
-    case F_SWEPT_DB: c->swept_cdb = (int16_t)(v * 100); break;
-    case F_SWEPT_PCT: c->swept_cover_pct = (uint8_t)v; break;
-    case F_DUTY: c->duty_pct = (uint8_t)v; break;
-    case F_HOLD: c->hold_s = (uint16_t)v; break;
-    case F_CLEAR: c->clear_s = (uint16_t)v; break;
-    case F_WEIGHT: s->weight[BAND_24] = (uint8_t)v; s->weight[BAND_5] = 1; break;
-    case F_BRIGHT: s->brightness = (uint8_t)v; break;
-    default: break;
-    }
-}
-
-static int clamp_step(field_t f, int v)
-{
-    const field_info_t *i = &s_info[f];
-    v = (v - i->min + i->step / 2) / i->step * i->step + i->min;
-    return v < i->min ? i->min : (v > i->max ? i->max : v);
-}
-
-static void show_value(field_t f, int v)
+static void show_value(param_t f, int v)
 {
     char buf[16];
-    snprintf(buf, sizeof(buf), "%d %s", v, s_info[f].unit);
+    snprintf(buf, sizeof(buf), "%d %s", v, param_info[f].unit);
     ui_set_text(s_value[f], buf);
 }
 
-/* Push the working copy to the detector, sweep and backlight. */
-static void apply(void)
+/* Push settings to the detector, sweep and backlight (not saved). */
+static esp_err_t apply(const settings_t *set)
 {
-    if (settings_check(&s_work) != 0) {
+    if (settings_check(set) != 0) {
         ESP_LOGW(TAG, "settings out of range, not applied");
-        return;
+        return ESP_ERR_INVALID_ARG;
     }
-    const unsigned w[BAND_COUNT] = {s_work.weight[BAND_24], s_work.weight[BAND_5]};
-    esp_err_t err = detector_set_config(&s_work.det);
+    const unsigned w[BAND_COUNT] = {set->weight[BAND_24], set->weight[BAND_5]};
+    esp_err_t err = detector_set_config(&set->det);
     if (err == ESP_OK) {
         err = sweep_set_weights(w);
     }
     if (err == ESP_OK) {
-        detector_set_scan(s_work.scan); /* before the sweep: no stale alarm in between */
-        err = sweep_set_scan(s_work.scan);
+        detector_set_scan(set->scan); /* before the sweep: no stale alarm in between */
+        err = sweep_set_scan(set->scan);
     }
     if (err == ESP_OK) {
-        err = board_backlight_set(s_work.brightness);
+        err = board_backlight_set(set->brightness);
     }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "apply: %s", esp_err_to_name(err));
     }
+    return err;
 }
 
 static void changed(void)
@@ -184,19 +111,19 @@ static void save(void)
 
 static void slider_cb(lv_event_t *e)
 {
-    const field_t f = (field_t)(uintptr_t)lv_event_get_user_data(e);
+    const param_t f = (param_t)(uintptr_t)lv_event_get_user_data(e);
     lv_obj_t *sl = lv_event_get_target(e);
-    const int v = clamp_step(f, lv_slider_get_value(sl));
+    const int v = param_clamp(f, lv_slider_get_value(sl));
     show_value(f, v);
-    if (f == F_BRIGHT) {
+    if (f == PARAM_BRIGHT) {
         board_backlight_set((uint8_t)v); /* live: an I2C write */
     }
-    if (lv_event_get_code(e) == LV_EVENT_RELEASED && get(&s_work, f) != v) {
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED && param_get(&s_work, f) != v) {
         lv_slider_set_value(sl, v, LV_ANIM_OFF);
-        set(&s_work, f, v);
-        apply();
+        param_set(&s_work, f, v);
+        apply(&s_work);
         changed();
-        ESP_LOGI(TAG, "%s = %d %s", s_info[f].name, v, s_info[f].unit);
+        ESP_LOGI(TAG, "%s = %d %s", param_info[f].name, v, param_info[f].unit);
     }
 }
 
@@ -216,7 +143,7 @@ static void scan_cb(lv_event_t *e)
         return;
     }
     s_work.scan[b] = on;
-    apply();
+    apply(&s_work);
     changed();
     ESP_LOGI(TAG, "scan %s %s", sweep_plan(b)->name, on ? "on" : "off");
 }
@@ -229,10 +156,10 @@ static void test_beep_cb(lv_event_t *e)
 
 static void load_controls(void)
 {
-    for (int f = 0; f < F_COUNT; f++) {
-        const int v = get(&s_work, (field_t)f);
+    for (int f = 0; f < PARAM_COUNT; f++) {
+        const int v = param_get(&s_work, (param_t)f);
         lv_slider_set_value(s_slider[f], v, LV_ANIM_OFF);
-        show_value((field_t)f, v);
+        show_value((param_t)f, v);
     }
     lv_obj_set_state(s_beep, LV_STATE_CHECKED, s_work.beep);
     for (int b = 0; b < BAND_COUNT; b++) {
@@ -266,7 +193,7 @@ static void defaults_cb(lv_event_t *e)
     }
     s_work = d;
     load_controls();
-    apply();
+    apply(&s_work);
     changed();
     ESP_LOGI(TAG, "defaults restored");
 }
@@ -380,15 +307,15 @@ lv_obj_t *ui_settings_create(void)
         s_scan[b] = btn;
     }
 
-    for (int f = 0; f < F_COUNT; f++) {
-        lv_obj_t *row = add_row(s_page[s_info[f].page], s_info[f].name);
+    for (int f = 0; f < PARAM_COUNT; f++) {
+        lv_obj_t *row = add_row(s_page[s_param_page[f]], param_info[f].name);
         s_value[f] = lv_label_create(row);
         lv_obj_align(s_value[f], LV_ALIGN_LEFT_MID, 0, 9);
         lv_obj_set_style_text_color(s_value[f], lv_color_hex(0x35d0ff), 0);
         lv_obj_t *sl = lv_slider_create(row);
         lv_obj_set_width(sl, BOARD_LCD_W - 24 - LABEL_W - 16);
         lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -8, 0);
-        lv_slider_set_range(sl, s_info[f].min, s_info[f].max);
+        lv_slider_set_range(sl, param_info[f].min, param_info[f].max);
         /* VALUE_CHANGED updates the label, RELEASED applies */
         lv_obj_add_event_cb(sl, slider_cb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)f);
         lv_obj_add_event_cb(sl, slider_cb, LV_EVENT_RELEASED, (void *)(uintptr_t)f);
@@ -458,4 +385,29 @@ void ui_settings_update(const ui_snap_t *s)
     if (s_dirty && lv_tick_elaps(s_changed_ms) >= SAVE_IDLE_MS) {
         save();
     }
+}
+
+esp_err_t ui_settings_set_key(const char *key, int value)
+{
+    if (!lvp_lock(1000)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    save(); /* edits made on the screen first, so they are not lost or reverted */
+    settings_t set;
+    settings_get(&set);
+    esp_err_t err = param_set_key(&set, key, value) == 0 && settings_check(&set) == 0 ? ESP_OK : ESP_ERR_INVALID_ARG;
+    if (err == ESP_OK) {
+        err = apply(&set);
+    }
+    if (err == ESP_OK) {
+        err = settings_set(&set);
+    }
+    if (err == ESP_OK) {
+        s_work = set; /* the screen shows the new value, whether visible now or later */
+        load_controls();
+        s_dirty = false;
+        ESP_LOGI(TAG, "remote: %s = %d", key, value);
+    }
+    lvp_unlock();
+    return err;
 }

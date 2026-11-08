@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "detector.h"
 #include "eventlog.h"
+#include "link.h"
 #include "settings.h"
 #include "sweep.h"
 
@@ -171,6 +172,7 @@ static void detector_task(void *arg)
         const char *name = b->plan->name;
         if (changed) {
             eventlog_post(b->plan->id, &ev);
+            link_post_event(b->plan->id, &ev);
             if (ev.from == DETECT_LEARNING && ev.to == DETECT_NORMAL) {
                 ESP_LOGI(TAG, "%s baseline learned (gain %u)", name, m->gain);
                 save_baseline(b, m->t_ms);
@@ -189,9 +191,9 @@ static void detector_task(void *arg)
         if (m->t_ms - last_log[item >> 1] >= STATUS_LOG_MS) {
             last_log[item >> 1] = m->t_ms;
             if (st.state == DETECT_LEARNING) {
-                ESP_LOGI(TAG, "%s learning baseline %u%%", name, st.learn_pct);
+                ESP_LOGD(TAG, "%s learning baseline %u%%", name, st.learn_pct);
             } else {
-                log_metrics(ESP_LOG_INFO, name, detect_state_name(st.state), &st.m);
+                log_metrics(ESP_LOG_DEBUG, name, detect_state_name(st.state), &st.m);
             }
             if (b->dropped + b->incomplete != b->logged_lost) {
                 b->logged_lost = b->dropped + b->incomplete;
