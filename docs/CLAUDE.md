@@ -22,3 +22,11 @@ Full spec: docs/BRIEF.md. Read the relevant section before each milestone.
 - M6 done (alarm beep, waterfall, TF-card CSV event log, AXP2101 battery; all checked on device).
 - All brief milestones (M0-M6) complete.
 - v1.0.0 released (GitHub release, merged bin flashed and checked on device).
+- HA part 1 (firmware 1.1.0): USB link, JSON lines (docs/LINK.md). Flashed; hello/status/event/commands,
+  no reset on open with DTR+RTS high, unread port does not slow the sweep: checked on device.
+  Pending user checks: microwave event, remote change seen on Settings screen, noise with link busy vs idle.
+- HA part 2: app (add-on) bridge in ha_addon/jammer_detector_bridge (repository.yaml at root), MQTT
+  device discovery, built locally by the Supervisor (no published image). Firmware streams only while
+  the host pings (60 s timeout); bridge ignores buffered lines until its random-id ping is acked.
+  Tested: pytest (scratchpad venv: pytest jinja2 paho-mqtt pyserial) + end to end with amqtt broker and
+  the real board. Not yet tested inside a real Home Assistant install (user to do).

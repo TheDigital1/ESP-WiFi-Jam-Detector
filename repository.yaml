@@ -1,0 +1,3 @@
+# Home Assistant app (add-on) repository: the bridge is in ha_addon/jammer_detector_bridge.
+name: esp-wifi-jammer-detector
+url: https://github.com/TheDigital1/ESP-WiFi-Jam-Detector

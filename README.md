@@ -30,6 +30,11 @@ like interference on 2.4 GHz.
 - **TF-card logging:** a CSV row for every state change. About 2 minutes
   after each alarm, a BMP of the waterfall with the alarm row in the middle.
 - **Battery level** from the AXP2101 power chip.
+- **Home Assistant:** plug the detector into the Home Assistant machine and
+  install the bridge app from this repository. Alarms, readings, events and
+  every setting appear as a device through MQTT discovery
+  ([ha_addon/jammer_detector_bridge](ha_addon/jammer_detector_bridge/DOCS.md)).
+  The USB protocol works with any other host too ([docs/LINK.md](docs/LINK.md)).
 - **Receive only:** no transmit, injection or deauth code, and Wi-Fi
   networking is off while scanning.
 
@@ -156,6 +161,20 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
   One image per alarm; a second alarm before the image is saved is in it.
 - **Battery:** the status screen header shows `USB`, `battery NN%` or
   `charging NN%` from the AXP2101 fuel gauge, read every 5 s.
+- **Home Assistant:** needs an MQTT broker (e.g. the Mosquitto broker app)
+  and the MQTT integration. In **Settings → Apps → App store → ⋮ →
+  Repositories** add this repository's URL, install **Jammer Detector
+  Bridge**, pick the detector's port (`Espressif USB JTAG serial debug unit`)
+  and start it. A **Jammer Detector** device appears with an alarm, state,
+  interference kind, floor rise, occupancy and event entity per band, battery,
+  and controls for re-learn, beep, bands scanned and every threshold.
+  Details and an example notification: [DOCS.md](ha_addon/jammer_detector_bridge/DOCS.md).
+- **USB link:** the protocol under the bridge. While a host sends commands,
+  the device sends a status line every 10 s and on every state change, one
+  line per event (the same fields as the TF-card log), and takes commands to
+  re-learn and to change any setting (applied and saved as if changed on the
+  screen). Open the port with DTR and RTS both high, or the board resets.
+  Format and examples: [docs/LINK.md](docs/LINK.md).
 - **First boot:** the receiver auto-ranges its gain (~8 s) and stores it, then
   learns the baseline for 60 s and stores it. Keep the RF environment normal
   during learning: anything present then becomes "normal". **Later boots**
@@ -228,6 +247,7 @@ waits at most for the strip already in flight.
 | LVGL / UI | 11 | short bursts, mostly waiting on LCD DMA; the plot is drawn straight to the panel in strips, not through LVGL |
 | sweep | 10 (12 during each ~2 ms capture) | CPU-bound; yields 10 % for detect and idle |
 | detect | 9 | one band spectrum per completed sweep; a sweep is dropped (counted) rather than block the sweep |
+| link_tx, link_rx | 2 (12 while writing) | USB link; each message is written inside a radio-quiet window, and dropped rather than waited for |
 
 The brief asked for the sweep to have the highest priority. Below the sweep,
 the UI only managed about 1 frame/s, because the 25 ms 5 GHz retunes starved
@@ -338,14 +358,20 @@ main/plot.c            spectrum renderer (host-tested)
 main/sweep.c           sweep task, auto-range, stitched spectra
 main/lvgl_port.c       LVGL display/touch glue, PSRAM allocator
 main/settings.c        settings, gains and baselines in NVS (jd_nvs partition)
+main/settings_values.c settings defaults and range check (host-tested)
 main/audio.c           alarm beep via ES8311 + NS4150B (esp_codec_dev)
 main/eventlog.c        TF-card CSV log of detector state changes, BMP writer
+main/link.c            USB link tasks (docs/LINK.md)
+main/link_proto.c      USB link message format and command parser (host-tested)
+main/params.c          adjustable settings table, shared by the screen and the link (host-tested)
 main/ui.c              screen switching, BOOT button, alarm border
 main/ui_status.c       status screen (default)
 main/ui_spectrum.c     spectrum screen and waterfall
 main/ui_settings.c     settings screen
 main/characterize.c    optional receiver/LCD measurements (CONFIG_JD_CHARACTERIZE)
 test_host/             host unit tests
+ha_addon/              Home Assistant app: USB-to-MQTT bridge (jdbridge/, tests/)
+repository.yaml        makes this repository a Home Assistant app repository
 tools/sim_spectra.py   synthetic spectra for the detector tests
 ```
 

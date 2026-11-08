@@ -1,0 +1,8 @@
+configuration:
+  device:
+    name: Detector
+    description: >-
+      The detector's USB port. Pick the entry with "Espressif USB JTAG serial debug unit" in its name.
+  log_level:
+    name: Log level
+    description: debug also shows the detector's own console log.
