@@ -33,8 +33,7 @@ like interference on 2.4 GHz.
 - **Home Assistant:** plug the detector into the Home Assistant machine and
   install the bridge app from this repository. Alarms, readings, events and
   every setting appear as a device through MQTT discovery
-  ([ha_addon/jammer_detector_bridge](ha_addon/jammer_detector_bridge/DOCS.md)).
-  The USB protocol works with any other host too ([docs/LINK.md](docs/LINK.md)).
+  ([below](#home-assistant)).
 - **Receive only:** no transmit, injection or deauth code, and Wi-Fi
   networking is off while scanning.
 
@@ -60,6 +59,54 @@ Click the GIF for the full 33 s video with sound (MP4, 5.4 MB).
 |---|---|---|
 | ![General settings: re-learn, auto-range, card and battery status, brightness, alarm beep](docs/media/settings-general.jpg) | ![Detection thresholds](docs/media/settings-detection.jpg) | ![Scan bands toggles and alarm timing](docs/media/settings-scan.jpg) |
 
+## Home Assistant
+
+Plug the detector into a USB port of your Home Assistant machine and it shows
+up as a **Jammer Detector** device: alarms, readings and event history per
+band, plus controls for every setting on the touchscreen. The bridge app
+included in this repository reads the detector over USB and publishes it
+through MQTT discovery, so there is no YAML to write. The detector itself
+still never uses Wi-Fi.
+
+![Home Assistant dashboard section: alarm, state and readings per band, 24 h floor-rise and occupancy history, activity log, controls and detection settings](docs/media/home-assistant.png)
+
+**Setup** (needs an MQTT broker such as the Mosquitto broker app, and the MQTT
+integration):
+
+1. Flash firmware **1.1.0 or later** (see [Flash a release](#flash-a-release-no-build)).
+2. In **Settings → Apps → App store**, open the menu (⋮) → **Repositories**
+   and add `https://github.com/TheDigital1/ESP-WiFi-Jam-Detector`.
+3. Install **Jammer Detector Bridge**. Home Assistant builds it on your
+   machine.
+4. On its **Configuration** tab, pick the detector
+   (`Espressif USB JTAG serial debug unit`) and start the app.
+
+**What you get**, per band (2.4 GHz and 5 GHz):
+
+- an **alarm** binary sensor for automations
+- **state** (learning / normal / suspect / alarm / off)
+- **interference kind** (wideband / swept / narrowband / pulsed)
+- **floor rise** in dB and **occupancy** in %
+- alarms since boot
+- an **event** entity with one event per state change, carrying all the
+  detector metrics
+
+Device-wide, you get:
+
+- **Battery** and **Charging**
+- **Controls:** a **Re-learn baseline** button, an **Alarm beep** switch, a
+  **Bands scanned** select, and a number for every detection threshold and
+  timing. Changes are applied and saved on the device straight away, the same
+  as on its screen.
+
+The bridge reconnects by itself if the detector is unplugged or restarts.
+While it is disconnected, its entities show as unavailable. Full details,
+including an example notification automation, are in
+[DOCS.md](ha_addon/jammer_detector_bridge/DOCS.md).
+
+The USB protocol under the bridge is plain JSON lines, so any other host can
+use it too ([docs/LINK.md](docs/LINK.md)).
+
 ## Flash a release (no build)
 
 Download `esp-wifi-jammer-detector-vX.Y.Z-merged.bin` from
@@ -68,7 +115,7 @@ write it at offset 0 with esptool 5 (`pip install esptool`; on esptool 4 the
 command is `esptool.py ... write_flash`):
 
 ```sh
-esptool --chip esp32c5 -p /dev/ttyACM0 -b 460800 write-flash 0x0 esp-wifi-jammer-detector-v1.0.0-merged.bin
+esptool --chip esp32c5 -p /dev/ttyACM0 -b 460800 write-flash 0x0 esp-wifi-jammer-detector-v1.1.0-merged.bin
 ```
 
 Use the board's USB-C port (`COMx` on Windows). This keeps your settings and
@@ -161,14 +208,7 @@ the synthetic spectra for the detector tests with `tools/sim_spectra.py`
   One image per alarm; a second alarm before the image is saved is in it.
 - **Battery:** the status screen header shows `USB`, `battery NN%` or
   `charging NN%` from the AXP2101 fuel gauge, read every 5 s.
-- **Home Assistant:** needs an MQTT broker (e.g. the Mosquitto broker app)
-  and the MQTT integration. In **Settings → Apps → App store → ⋮ →
-  Repositories** add this repository's URL, install **Jammer Detector
-  Bridge**, pick the detector's port (`Espressif USB JTAG serial debug unit`)
-  and start it. A **Jammer Detector** device appears with an alarm, state,
-  interference kind, floor rise, occupancy and event entity per band, battery,
-  and controls for re-learn, beep, bands scanned and every threshold.
-  Details and an example notification: [DOCS.md](ha_addon/jammer_detector_bridge/DOCS.md).
+- **Home Assistant:** see [Home Assistant](#home-assistant) above.
 - **USB link:** the protocol under the bridge. While a host sends commands,
   the device sends a status line every 10 s and on every state change, one
   line per event (the same fields as the TF-card log), and takes commands to
